@@ -13,6 +13,8 @@ use crate::protocol::frost;
 use crate::protocol::gg18;
 #[cfg(feature = "protocol")]
 use crate::protocol::{self, KeygenProtocol, ThresholdProtocol};
+#[cfg(feature = "protocol")]
+use crate::security::{unpack_broadcast, ProtocolType, SecureLayer, State as SecureLayerState};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -20,6 +22,17 @@ pub enum ProtocolId {
     Gg18,
     Elgamal,
     Frost,
+}
+
+#[cfg(feature = "protocol")]
+impl From<ProtocolId> for ProtocolType {
+    fn from(pid: ProtocolId) -> Self {
+        match pid {
+            ProtocolId::Gg18 => ProtocolType::Gg18,
+            ProtocolId::Elgamal => ProtocolType::Elgamal,
+            ProtocolId::Frost => ProtocolType::Frost,
+        }
+    }
 }
 
 #[repr(C)]
@@ -91,13 +104,13 @@ pub unsafe extern "C" fn error_free(error: *mut c_char) {
 
 pub struct Protocol {
     #[cfg(feature = "protocol")]
-    instances: Vec<Box<dyn protocol::Protocol>>,
+    inner: SecureLayer,
 }
 
 impl Protocol {
     #[cfg(feature = "protocol")]
-    fn wrap(instances: Vec<Box<dyn protocol::Protocol>>) -> *mut Self {
-        Box::into_raw(Box::new(Protocol { instances }))
+    fn wrap(inner: SecureLayer) -> *mut Self {
+        Box::into_raw(Box::new(Protocol { inner }))
     }
 }
 
@@ -105,7 +118,7 @@ impl Protocol {
 #[no_mangle]
 pub unsafe extern "C" fn protocol_serialize(proto_ptr: *mut Protocol) -> Buffer {
     let proto = unsafe { Box::from_raw(proto_ptr) };
-    serde_json::to_vec(&proto.instances).unwrap().into()
+    serde_json::to_vec(&proto.inner).unwrap().into()
 }
 
 #[cfg(feature = "protocol")]
@@ -119,6 +132,10 @@ pub unsafe extern "C" fn protocol_deserialize(ctx_ptr: *const u8, ctx_len: usize
 #[no_mangle]
 pub unsafe extern "C" fn protocol_keygen(
     proto_id: ProtocolId,
+    certs_ptr: *const u8,
+    certs_len: usize,
+    pkcs12_ptr: *const u8,
+    pkcs12_len: usize,
     with_card: bool,
     shares: usize,
 ) -> *mut Protocol {
@@ -135,8 +152,16 @@ pub unsafe extern "C" fn protocol_keygen(
             _ => panic!("Protocol not supported"),
         }
     };
-
-    Protocol::wrap((0..shares).map(build_proto).collect())
+    let certs = unsafe { slice::from_raw_parts(certs_ptr, certs_len) };
+    let pkcs12 = unsafe { slice::from_raw_parts(pkcs12_ptr, pkcs12_len) };
+    let sl = SecureLayer::new(
+        SecureLayerState::CertSwap,
+        (0..shares).map(build_proto).collect(),
+        certs,
+        pkcs12,
+        proto_id.into(),
+    );
+    Protocol::wrap(sl)
 }
 
 #[cfg(feature = "protocol")]
@@ -151,7 +176,7 @@ pub unsafe extern "C" fn protocol_advance(
     let data_in = unsafe { slice::from_raw_parts(data_ptr, data_len) };
     let proto = unsafe { &mut *proto_ptr };
 
-    let (vec, rec) = match proto.instances[index].advance(data_in) {
+    let (vec, rec) = match proto.inner.advance_share(index, data_in) {
         Ok((vec, rec)) => (vec, rec.into()),
         Err(error) => {
             set_error(error_out, &*error);
@@ -169,11 +194,7 @@ pub unsafe extern "C" fn protocol_finish(
 ) -> Buffer {
     let proto = unsafe { Box::from_raw(proto_ptr) };
 
-    let res: Result<Vec<Vec<u8>>, Box<dyn Error>> = proto
-        .instances
-        .into_iter()
-        .map(|instance| instance.finish())
-        .collect();
+    let res = proto.inner.finish_all();
 
     match res {
         Ok(vec_data_out) => serde_json::to_vec(&vec_data_out).unwrap(),
@@ -192,6 +213,10 @@ pub unsafe extern "C" fn protocol_init(
     proto_id: ProtocolId,
     group_ptr: *const u8,
     group_len: usize,
+    certs_ptr: *const u8,
+    certs_len: usize,
+    pkcs12_ptr: *const u8,
+    pkcs12_len: usize,
     shares: usize,
 ) -> *mut Protocol {
     let group_ser = unsafe { slice::from_raw_parts(group_ptr, group_len) };
@@ -210,7 +235,16 @@ pub unsafe extern "C" fn protocol_init(
         }
     };
 
-    Protocol::wrap(shares_ser[..shares].iter().map(build_proto).collect())
+    let certs = unsafe { slice::from_raw_parts(certs_ptr, certs_len) };
+    let pkcs12 = unsafe { slice::from_raw_parts(pkcs12_ptr, pkcs12_len) };
+    let sl = SecureLayer::new(
+        SecureLayerState::Init,
+        shares_ser[..shares].iter().map(build_proto).collect(),
+        certs,
+        pkcs12,
+        proto_id.into(),
+    );
+    Protocol::wrap(sl)
 }
 
 #[repr(C)]
@@ -276,7 +310,9 @@ pub unsafe extern "C" fn encrypt(
     let msg = unsafe { slice::from_raw_parts(msg_ptr, msg_len) };
     let key = unsafe { slice::from_raw_parts(key_ptr, key_len) };
 
-    match elgamal::encrypt(msg, key) {
+    let key = unpack_broadcast(&key);
+
+    match elgamal::encrypt(msg, &key) {
         Ok(ciphertext) => ciphertext.into(),
         Err(error) => {
             set_error(error_out, &*error);

@@ -9,9 +9,6 @@ mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-use crate::proto::{ClientMessage, ProtocolType};
-use prost::Message;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub enum Recipient {
@@ -37,70 +34,14 @@ pub trait ThresholdProtocol: Protocol {
         Self: Sized;
 }
 
-/// Deserializes values in a `HashMap`
-fn deserialize_map<'de, T: Deserialize<'de>>(
-    map: &'de HashMap<u32, Vec<u8>>,
-) -> serde_json::Result<HashMap<u32, T>> {
-    map.iter()
-        .map(|(k, v)| Ok((*k, serde_json::from_slice::<T>(v.as_slice())?)))
-        .collect()
-}
-
-/// Encode a broadcast message to protobuf format
-fn encode_raw_bcast(message: Vec<u8>, protocol_type: ProtocolType) -> Vec<u8> {
-    ClientMessage {
-        protocol_type: protocol_type.into(),
-        unicasts: HashMap::new(),
-        broadcast: Some(message),
-    }
-    .encode_to_vec()
-}
-
-/// Serialize and encode a broadcast message to protobuf format
-fn serialize_bcast<T: Serialize>(
-    value: &T,
-    protocol_type: ProtocolType,
-) -> serde_json::Result<Vec<u8>> {
-    let message = serde_json::to_vec(value)?;
-    Ok(encode_raw_bcast(message, protocol_type))
-}
-
-/// Encode unicast messages to protobuf format
-///
-/// Each message is associated with an index as used by a respective protocol
-fn encode_raw_uni(messages: HashMap<u32, Vec<u8>>, protocol_type: ProtocolType) -> Vec<u8> {
-    ClientMessage {
-        protocol_type: protocol_type.into(),
-        unicasts: messages,
-        broadcast: None,
-    }
-    .encode_to_vec()
-}
-
-/// Serialize and encode unicast messages to protobuf format
-///
-/// Each message is associated with an index as used by a respective protocol
-fn serialize_uni<T, I>(kvs: I, protocol_type: ProtocolType) -> serde_json::Result<Vec<u8>>
-where
-    I: IntoIterator<Item = (u32, T)>,
-    T: Serialize,
-{
-    let messages = kvs
-        .into_iter()
-        .map(|(k, v)| Ok((k, serde_json::to_vec(&v)?)))
-        .collect::<serde_json::Result<_>>()?;
-    Ok(encode_raw_uni(messages, protocol_type))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use prost::bytes::Bytes;
+    use prost::{bytes::Bytes, Message as _};
 
-    use crate::{
-        proto::{ProtocolGroupInit, ProtocolInit, ServerMessage},
-        protocol::{KeygenProtocol, ThresholdProtocol},
+    use crate::proto::{
+        ClientMessage, ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,
     };
 
     pub(super) trait KeygenProtocolTest: KeygenProtocol + Sized {

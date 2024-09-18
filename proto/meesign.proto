@@ -32,3 +32,8 @@ message ServerMessage {
   map<uint32, bytes> unicasts = 2;
   map<uint32, bytes> broadcasts = 3;
 }
+
+message SignedMessage {
+    bytes message = 1;
+    bytes signature = 2;
+}

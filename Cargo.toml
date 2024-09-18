@@ -21,10 +21,14 @@ frost-secp256k1 = { git  = "https://github.com/dufkan/frost.git", branch = "seri
 aes-gcm = "0.10.2"
 k256 = { version = "0.13.1", features = ["arithmetic"] }
 p12 = "0.6.3"
+yasna = "0.5.2"
 x509-cert = { version = "0.2.5", features = ["builder"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 # https://github.com/RustCrypto/elliptic-curves/discussions/1005
 sha2 = { version = "0.10.7", features = ["oid"] }
+ecies = "0.2.7"
+const-oid = "0.9.6"
+der = { version = "0.7.9", features = ["derive"] }
 
 [build-dependencies]
 cbindgen = "0.20.0"
