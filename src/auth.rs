@@ -29,8 +29,11 @@ pub struct MeeSignPublicBundle {
     pub broadcast_sign: Vec<u8>,
 }
 
+/// An OID from a testing namespace as documented here:
+/// https://web.archive.org/web/20100430054707/http://www.imc.org/ietf-pkix/pkix-oid.asn
 impl AssociatedOid for MeeSignPublicBundle {
-    const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.3.4.5.6");
+    const OID: ObjectIdentifier =
+        ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.13.9939");
 }
 
 impl AsExtension for MeeSignPublicBundle {
