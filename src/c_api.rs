@@ -233,6 +233,8 @@ pub unsafe extern "C" fn protocol_init(
             ProtocolId::Elgamal => Box::new(elgamal::DecryptContext::new(share_ser)),
             #[cfg(feature = "frost")]
             ProtocolId::Frost => Box::new(frost::SignContext::new(share_ser)),
+            #[cfg(feature = "musig2meesign")]
+            ProtocolId::Musig2 => Box::new(musig2meesign::SignContext::new(share_ser)),
             #[cfg(not(all(feature = "gg18", feature = "elgamal", feature = "frost")))]
             _ => panic!("Protocol not supported"),
         }

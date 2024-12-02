@@ -6,12 +6,10 @@ use crate::protocol::*;
 use musig2::verify_single;
 use musig2::{CompactSignature, FirstRound, KeyAggContext, PartialSignature, PubNonce, SecondRound};
 use musig2::secp::Scalar;
-use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey, VerifyOnlyPreallocated};
+use rand::RngCore;
+use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use prost::Message;
-use serde::{de, Deserialize, Serialize};
-use sha2::digest::typenum::int;
-use std::collections::BTreeMap;
-use std::convert::{TryFrom, TryInto};
+use serde::{Deserialize, Serialize};
 
 use rand::rngs::OsRng;
 
@@ -32,16 +30,16 @@ pub(crate) struct KeygenContext {
 enum KeygenRound {
     R0,
     R1(Setup, Signer), // Setup and skey share of the user
-    Done(Setup, Signer, PublicKey),
+    Done(Setup, Signer),
 }
 
 impl KeygenContext {
-    pub fn with_card() -> Self {
-        Self {
-            round: KeygenRound::R0,
-            with_card: false, // Change when card is implemented
-        }
-    }
+    //pub fn with_card() -> Self {
+    //    Self {
+    //        round: KeygenRound::R0,
+    //        with_card: false, //TODO: Change when card is implemented
+    //    }
+    //}
 
     fn init(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let msg = ProtocolGroupInit::decode(data)?;
@@ -86,12 +84,12 @@ impl KeygenContext {
                 let agg_pubkey = signer.get_agg_pubkey().clone();
 
                 (
-                    KeygenRound::Done(*setup, signer.clone(), agg_pubkey),
+                    KeygenRound::Done(*setup, signer.clone()),
                     agg_pubkey.serialize().to_vec(),
                     Recipient::Server,
                 )
             }
-            KeygenRound::Done(_, _, _) => return Err("protocol already finished".into()),
+            KeygenRound::Done(_, _) => return Err("protocol already finished".into()),
         };
         self.round = c;
 
@@ -108,11 +106,10 @@ impl Protocol for KeygenContext {
         }
     }
 
-    //TODO: This is being sent somewhere?
     fn finish(self: Box<Self>) -> Result<Vec<u8>> {
         match self.round {
-            KeygenRound::Done(setup, signer, pubkey) => {
-                Ok(serde_json::to_vec(&(setup, signer, pubkey))?)
+            KeygenRound::Done(setup, signer) => {
+                Ok(serde_json::to_vec(&(setup, signer))?)
             }
             _ => Err("protocol not finished".into()),
         }
@@ -128,20 +125,10 @@ impl KeygenProtocol for KeygenContext {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct SignContext {
-    setup: Setup,
-    initial_signer: Signer,
-    pubkey: PublicKey,
-    message: Option<Vec<u8>>,
-    indices: Option<Vec<u16>>,
-    round: SignRound,
-}
-
-
 // By GitHub Copilot
 // Deserialize a vector of bytes with pubnonces/partial signatures and internal identifiers of the signers to a hashmap
-fn deserialize_musig(data: Vec<u8>, chunk_len: usize) -> Result<HashMap<u8, Vec<u8>>> {
+fn deserialize_musig(data: Vec<Vec<u8>>, chunk_len: usize) -> Result<HashMap<u8, Vec<u8>>> {
+    let data = data.concat();
     if data.len() % chunk_len != 0 {
         return Err("Input data length must be a multiple of the input size".into());
     }
@@ -162,23 +149,17 @@ fn deserialize_musig(data: Vec<u8>, chunk_len: usize) -> Result<HashMap<u8, Vec<
     Ok(hashmap)
 }
 
-fn deserialize_musig_point(data: Vec<Vec<u8>>) -> Result<HashMap<u8, [u8; 33]>> {
-    deserialize_musig(data.concat(), 34).map(|hashmap| {
-        hashmap
-            .into_iter()
-            .map(|(k, v)| (k, v.try_into().unwrap()))
-            .collect()
-    })
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SignContext {
+    setup: Setup,
+    initial_signer: Signer,
+    message: Option<Vec<u8>>,
+    indices: Option<Vec<u16>>,
+    round: SignRound,
 }
 
-fn deserialize_musig_scalar(data: Vec<Vec<u8>>) -> Result<HashMap<u8, [u8; 32]>> {
-    deserialize_musig(data.concat(), 33).map(|hashmap| {
-        hashmap
-            .into_iter()
-            .map(|(k, v)| (k, v.try_into().unwrap()))
-            .collect()
-    })
-}
+const POINT_CHUNK_LEN: usize = 34; //(33+1)
+const SCALAR_CHUNK_LEN: usize = 33; //(32+1)
 
 #[derive(Serialize, Deserialize)]
 enum SignRound {
@@ -189,9 +170,9 @@ enum SignRound {
 }
 
 impl SignContext {
-    fn participants(&self) -> usize {
-        self.indices.as_ref().unwrap().len()
-    }
+    //fn participants(&self) -> usize {
+    //    self.indices.as_ref().unwrap().len()
+    //}
 
     // Format sent is &[u8] + u8 (pubnonce and index of the signer)
     fn init(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
@@ -204,12 +185,16 @@ impl SignContext {
         self.message = Some(msg.data);
 
         // TODO: Can I shuffle the ids of the signers?
+        // Generate secnonce and pubnonce
         self.initial_signer.first_round();
 
         let internal_index: u8 = self.initial_signer.get_index() as u8;
         let pubnonce = self.initial_signer.get_pubnonce_serialized();
+
+        // Serialize the public nonce and the internal index of the signer. Format: &[u8] + u8
         let msg = serialize_bcast(&(pubnonce, internal_index), ProtocolType::Musig2)?; // TODO: Check if this is correct usage of serialize_bcast
 
+        // TODO: Can I somehow just pass a reference instead of cloning? (Due to Signer having a secret share inside)
         self.round = SignRound::R1(self.initial_signer.clone());
 
         Ok((msg, Recipient::Server))
@@ -224,7 +209,7 @@ impl SignContext {
 
                 // TODO: Is the pubnonce instance of this Signer object returned by the server?
                 // Generate hashmap <internal index of Signer, pubnonce>
-                let pubnonces = deserialize_musig_point(pubnonce_hashmap.values().cloned().collect())?;
+                let pubnonces = deserialize_musig(pubnonce_hashmap.values().cloned().collect(), POINT_CHUNK_LEN)?;
 
                 // Create a vector of tuples (internal index of Signer, pubnonce)
                 let pubnonces: Vec<(usize, Vec<u8>)> = pubnonces
@@ -233,6 +218,7 @@ impl SignContext {
                     .collect();
 
                 // Get copy of Signer object
+                // TODO: Another example of the unnecessary cloning?
                 let mut signer: Signer = signer.clone();
 
                 // Establish second round
@@ -241,9 +227,11 @@ impl SignContext {
 
                     let partial_signature = signer.get_partial_signature_serialized();
                     let internal_index = signer.get_index() as u8;
+
+                    // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
                     let msg = serialize_bcast(&(partial_signature, internal_index), ProtocolType::Musig2)?;
 
-                    self.round = SignRound::R2(signer.clone());
+                    self.round = SignRound::R2(signer);
                     
                     Ok((msg, Recipient::Server))
                 } else {
@@ -253,7 +241,7 @@ impl SignContext {
             SignRound::R2(signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
                 let shares_hashmap: HashMap<u32, Vec<u8>> = deserialize_map(&data)?;
-                let shares = deserialize_musig_scalar(shares_hashmap.values().cloned().collect())?;
+                let shares = deserialize_musig(shares_hashmap.values().cloned().collect(), SCALAR_CHUNK_LEN)?;
 
                 // Create a vector of tuples (internal index of Signer, partial signature)
                 let partial_signatures: Vec<(usize, Vec<u8>)> = shares
@@ -301,12 +289,11 @@ impl Protocol for SignContext {
 
 impl ThresholdProtocol for SignContext {
     fn new(group: &[u8]) -> Self {
-        let (setup, initial_signer, pubkey): (Setup, Signer, PublicKey) =
+        let (setup, initial_signer): (Setup, Signer) =
             serde_json::from_slice(group).expect("could not deserialize group context");
         Self {
             setup,
             initial_signer,
-            pubkey,
             message: None,
             indices: None,
             round: SignRound::R0,
@@ -527,11 +514,18 @@ impl Signer {
         // Secret key share
         let seckey = self.seckey();
 
+        // Create an instance of OsRng
+        let mut rng = OsRng;
+
+        // Generate a random 32-byte array
+        let mut nonce_seed = [0u8; 32];
+        rng.fill_bytes(&mut nonce_seed);
+
         // Create first round for this signer
         let first_round = musig2::FirstRound::new(
             self.key_agg_ctx.clone().unwrap(),
             // TODO: I can't see any problem here
-            &mut OsRng,
+            nonce_seed,
             self.index.unwrap(),
             musig2::SecNonceSpices::new()
                 .with_seckey(seckey)
