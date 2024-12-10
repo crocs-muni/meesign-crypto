@@ -1,7 +1,6 @@
-use crate::auth::{MeeSignPrivateBundle, MeeSignPublicBundle};
-use crate::proto::{self, ClientMessage, ServerMessage, SignedMessage};
+use crate::auth::{extract_public_bundle_der, MeeSignPrivateBundle, MeeSignPublicBundle};
+use crate::proto::{self, ClientMessage, ProtocolGroupInit, ProtocolInit, ServerMessage, SignedMessage};
 use crate::protocol::{Protocol, Recipient, Result};
-use const_oid::AssociatedOid;
 use der::{self, Decode as _};
 use p256::ecdsa;
 use p256::ecdsa::signature::{Signer as _, Verifier as _};
@@ -9,7 +8,6 @@ use p256::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use x509_cert::Certificate;
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
 pub enum ProtocolType {
@@ -28,15 +26,73 @@ impl From<ProtocolType> for proto::ProtocolType {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+impl From<ProtocolType> for i32 {
+    fn from(pt: ProtocolType) -> i32 {
+        proto::ProtocolType::from(pt).into()
+    }
+}
+
+fn verify_message(signed_message: &[u8], key: &ecdsa::VerifyingKey) -> Result<Vec<u8>> {
+    let signed_message = SignedMessage::decode(signed_message)?;
+    let signature = ecdsa::Signature::from_slice(&signed_message.signature)?;
+    key.verify(&signed_message.message, &signature)?;
+    Ok(signed_message.message)
+}
+
+fn secure_message(
+    mut message: ClientMessage,
+    private_bundle: &MeeSignPrivateBundle,
+    public_bundles: &HashMap<u32, MeeSignPublicBundle>,
+) -> Result<ClientMessage> {
+    if let Some(msg) = &mut message.broadcast {
+        let pkey = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
+        let signature: ecdsa::Signature = pkey.sign(msg);
+        *msg = SignedMessage {
+            message: msg.to_vec(),
+            signature: signature.to_vec(),
+        }
+        .encode_to_vec();
+    }
+    Ok(message)
+}
+
+fn finalize_round(
+    data: Vec<u8>,
+    recipient: Recipient,
+    private_bundle: &MeeSignPrivateBundle,
+    public_bundles: &HashMap<u32, MeeSignPublicBundle>,
+) -> Result<(State, Vec<u8>, Recipient)> {
+    if let Recipient::Card = recipient {
+        return Ok((State::CardResponse, data, recipient));
+    }
+
+    let data = ClientMessage::decode(data.as_ref()).unwrap();
+    let data = secure_message(data, private_bundle, public_bundles)?;
+    let state = if data.broadcast.is_some() {
+        assert_eq!(data.unicasts.len(), 0);
+        State::BroadcastExchange
+    } else {
+        State::Running
+    };
+    let data = data.encode_to_vec();
+
+    Ok((state, data, recipient))
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub enum State {
     CertSwap,
     Init,
     Running,
+    CardResponse,
+    BroadcastExchange,
+    BroadcastCheck(HashMap<u32, Vec<u8>>),
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct SecureLayer {
+    participant_indices: Vec<u32>,
+    share_indices: Vec<u32>,
     shares: Vec<(State, Box<dyn Protocol>)>,
     public_bundles: HashMap<u32, Vec<u8>>, // MeeSignPublicBundles in DER format for each share index
     private_bundle: Vec<u8>,               // MeeSignPrivateBundle in DER format
@@ -56,15 +112,7 @@ impl SecureLayer {
             .broadcasts
             .into_iter()
             .map(|(party, cert)| {
-                let bundle = Certificate::from_der(&cert)?
-                    .tbs_certificate
-                    .extensions
-                    .ok_or("certificate does not contain public bundle")?
-                    .into_iter()
-                    .find(|ext| ext.extn_id == MeeSignPublicBundle::OID)
-                    .ok_or("certificate does not contain public bundle")?
-                    .extn_value
-                    .into_bytes();
+                let bundle = extract_public_bundle_der(&cert)?;
                 Ok((party, bundle))
             })
             .collect::<Result<HashMap<_, _>>>()
@@ -87,9 +135,11 @@ impl SecureLayer {
         };
 
         Self {
+            participant_indices: Vec::new(),  // NOTE: initialized in round 0
+            share_indices: vec![0; shares.len()], // NOTE: initialized in round 0
             shares: shares
                 .into_iter()
-                .map(|share| (initial_state, share))
+                .map(|share| (initial_state.clone(), share))
                 .collect(),
             public_bundles,
             private_bundle,
@@ -97,67 +147,134 @@ impl SecureLayer {
         }
     }
 
-    pub fn advance_share(&mut self, index: usize, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
-        let (state, protocol) = &mut self.shares[index];
+    pub fn advance_share(&mut self, share_idx: usize, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+        let (state, protocol) = &mut self.shares[share_idx];
 
-        let sign_pub_keys = self
+        let public_bundles = self
             .public_bundles
             .iter()
             .map(|(&party, bundle)| {
                 let bundle = MeeSignPublicBundle::from_der(bundle)?;
-                let key = ecdsa::VerifyingKey::from_public_key_der(&bundle.broadcast_sign)?;
-                Ok((party, key))
+                Ok((party, bundle))
             })
             .collect::<Result<HashMap<_, _>>>()?;
 
         let private_bundle = MeeSignPrivateBundle::from_der(&self.private_bundle)?;
-        let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
 
         let (msg, recipient);
         (*state, msg, recipient) = match state {
-            State::CertSwap => (State::Init, Vec::new(), Recipient::Server),
+            State::CertSwap => {
+                let ack = ClientMessage {
+                    broadcast: Some(Vec::from("certificates received")),
+                    unicasts: HashMap::new(),
+                    protocol_type: self.protocol_type.into(),
+                }
+                .encode_to_vec();
+                (State::Init, ack, Recipient::Server)
+            },
             State::Init => {
+                if let Ok(pgi) = ProtocolGroupInit::decode(data) {
+                    let index_offset = match self.protocol_type {
+                        ProtocolType::Frost => 1,
+                        _ => 0,
+                    };
+                    self.participant_indices = (index_offset..pgi.parties+index_offset).collect();
+                    self.share_indices[share_idx] = pgi.index;
+                } else if let Ok(pi) = ProtocolInit::decode(data) {
+                    self.participant_indices = pi.indices;
+                    self.share_indices[share_idx] = pi.index;
+                } else {
+                    return Err("invalid data in round 0".into());
+                }
+
                 let (data, recipient) = protocol.advance(&data)?;
 
-                let mut data = ClientMessage::decode(data.as_ref()).unwrap();
-                if let Some(msg) = &mut data.broadcast {
-                    let signature: ecdsa::Signature = sign_key.sign(msg);
-                    *msg = SignedMessage {
-                        message: msg.to_vec(),
-                        signature: signature.to_vec(),
-                    }
-                    .encode_to_vec();
+                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+            },
+            State::BroadcastExchange => {
+                let data_dec = ServerMessage::decode(data)?;
+                let mut original_msgs = HashMap::new();
+                for (sender, message) in &data_dec.broadcasts {
+                    let key = &public_bundles[sender].broadcast_sign;
+                    let key = ecdsa::VerifyingKey::from_public_key_der(key)?;
+                    let message = verify_message(message, &key)?;
+                    original_msgs.insert(*sender, message);
                 }
-                let data = data.encode_to_vec();
+                assert_eq!(data_dec.unicasts.len(), 0);
 
-                (State::Running, data, recipient)
-            }
+                let bcast_sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
+                let signature: ecdsa::Signature = bcast_sign_key.sign(data);
+                let data = ClientMessage{
+                    unicasts: HashMap::new(),
+                    broadcast: Some(SignedMessage {
+                        message: data.to_vec(),
+                        signature: signature.to_vec(),
+                    }.encode_to_vec()),
+                    protocol_type: self.protocol_type.into(),
+                }
+                .encode_to_vec();
+
+                (State::BroadcastCheck(original_msgs), data, Recipient::Server)
+            },
+            State::BroadcastCheck(original_msgs) => {
+                let data = ServerMessage::decode(data)?;
+                assert!(!data.broadcasts.contains_key(&self.share_indices[share_idx]));
+                assert_eq!(data.broadcasts.len(), self.participant_indices.len() - 1);
+
+                let sign_pub_keys: HashMap<_, _> = public_bundles
+                    .iter()
+                    .map(|(party, bundle)| {
+                        let key = ecdsa::VerifyingKey::from_public_key_der(&bundle.broadcast_sign)?;
+                        Ok((party, key))
+                    })
+                    .collect::<Result<_>>()?;
+
+                for (relayer, relayed_msgs) in &data.broadcasts {
+                    let relayed_msgs = verify_message(relayed_msgs, &sign_pub_keys[relayer])?;
+                    let relayed_msgs = ServerMessage::decode(relayed_msgs.as_slice())?;
+                    assert_eq!(relayed_msgs.broadcasts.len(), self.participant_indices.len() - 1);
+
+                    for (sender, relayed_msg) in &relayed_msgs.broadcasts {
+                        let relayed_msg = verify_message(relayed_msg, &sign_pub_keys[sender])?;
+
+                        if sender == relayer || *sender == self.share_indices[share_idx] {
+                            continue;
+                        }
+                        if !original_msgs.get(sender).is_some_and(|msg| msg == &relayed_msg) {
+                            return Err("broadcast compromised".into());
+                        }
+                    }
+                }
+                assert_eq!(data.unicasts.len(), 0);
+
+                let data = ServerMessage {
+                    unicasts: HashMap::new(),
+                    broadcasts: original_msgs.clone(),
+                    protocol_type: self.protocol_type.into(),
+                }
+                .encode_to_vec();
+
+                let (data, recipient) = protocol.advance(&data)?;
+
+                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+            },
+            State::CardResponse => {
+                let (data, recipient) = protocol.advance(&data)?;
+
+                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+            },
             State::Running => {
                 let mut data = ServerMessage::decode(data)?;
                 for (sender, broadcast) in &mut data.broadcasts {
-                    let sm = SignedMessage::decode(broadcast.as_slice())?;
-                    let signature = ecdsa::Signature::from_slice(&sm.signature)?;
-                    sign_pub_keys[sender]
-                        .verify(&sm.message, &signature)
-                        .map_err(|_| "broadcast signature mismatch")?;
-                    *broadcast = sm.message;
+                    let verifying_key = &public_bundles[sender].broadcast_sign;
+                    let verifying_key = ecdsa::VerifyingKey::from_public_key_der(verifying_key)?;
+                    *broadcast = verify_message(broadcast, &verifying_key)?;
                 }
                 let data = data.encode_to_vec();
 
                 let (data, recipient) = protocol.advance(&data)?;
 
-                let mut data = ClientMessage::decode(data.as_ref()).unwrap();
-                if let Some(msg) = &mut data.broadcast {
-                    let signature: ecdsa::Signature = sign_key.sign(msg);
-                    *msg = SignedMessage {
-                        message: msg.to_vec(),
-                        signature: signature.to_vec(),
-                    }
-                    .encode_to_vec();
-                }
-                let data = data.encode_to_vec();
-
-                (State::Running, data, recipient)
+                finalize_round(data, recipient, &private_bundle, &public_bundles)?
             }
         };
         Ok((msg, recipient))
@@ -169,9 +286,4 @@ impl SecureLayer {
             .map(|(_, share)| share.finish())
             .collect()
     }
-}
-
-pub fn unpack_broadcast(msg: &[u8]) -> Vec<u8> {
-    let bcast = SignedMessage::decode(msg).unwrap();
-    bcast.message
 }
