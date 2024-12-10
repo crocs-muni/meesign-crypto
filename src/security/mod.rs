@@ -92,27 +92,43 @@ fn finalize_round(
     Ok((state, data, recipient))
 }
 
+/// The `SecureLayer` wraps each `Protocol` in a state machine
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub enum State {
+    /// An offset round to allow the server to pass the certificates here
     CertSwap,
+    /// Initializes the protocols
     Init,
+    /// Computes one protocol round
     Running,
+    /// Handles the response of a smart card
     CardResponse,
+    /// Reached after a broadcast is sent. Implements echo-broadcast round 2. Does not compute a protocol round
     BroadcastExchange,
+    /// Finished echo-broadcast and continues with another protocol round
     BroadcastCheck(HashMap<u32, Vec<u8>>),
 }
 
+/// A wrapper around the raw threshold protocols providing necessary security guarantees,
+/// namely reliable, authenticated broadcasts
 #[derive(Deserialize, Serialize)]
 pub struct SecureLayer {
+    /// Share indices of all participants
     participant_indices: Vec<u32>,
+    /// Share indices corresponding to the `shares` field
     share_indices: Vec<u32>,
+    /// The respective computation states for each share of this participant
     shares: Vec<(State, Box<dyn Protocol>)>,
-    public_bundles: HashMap<u32, Vec<u8>>, // MeeSignPublicBundles in DER format for each share index
-    private_bundle: Vec<u8>,               // MeeSignPrivateBundle in DER format
+    /// MeeSignPublicBundles in DER format for each share index
+    public_bundles: HashMap<u32, Vec<u8>>,
+    /// MeeSignPrivateBundle in DER format
+    private_bundle: Vec<u8>,
+    /// The underlying threshold protocol
     protocol_type: ProtocolType,
 }
 
 impl SecureLayer {
+    /// Secures the communication of protocols in `shares`
     pub fn new(
         initial_state: State,
         shares: Vec<Box<dyn Protocol>>,
@@ -160,6 +176,7 @@ impl SecureLayer {
         }
     }
 
+    /// Advances the computation of one share
     pub fn advance_share(&mut self, share_idx: usize, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let (state, protocol) = &mut self.shares[share_idx];
 
@@ -300,6 +317,7 @@ impl SecureLayer {
         Ok((msg, recipient))
     }
 
+    /// Finishes the computation of all shares
     pub fn finish_all(self) -> Result<Vec<Vec<u8>>> {
         self.shares
             .into_iter()
