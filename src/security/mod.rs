@@ -53,6 +53,19 @@ fn secure_message(
         }
         .encode_to_vec();
     }
+    if message.unicasts.len() > 0 {
+        let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
+        for (recipient, unicast) in &mut message.unicasts {
+            let enc_key = &public_bundles[recipient].unicast_encrypt;
+            let encrypted = ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
+            let signature: ecdsa::Signature = sign_key.sign(&encrypted);
+            *unicast = SignedMessage {
+                message: encrypted,
+                signature: signature.to_vec(),
+            }
+            .encode_to_vec();
+        }
+    }
     Ok(message)
 }
 
@@ -265,6 +278,13 @@ impl SecureLayer {
             },
             State::Running => {
                 let mut data = ServerMessage::decode(data)?;
+                for (sender, unicast) in &mut data.unicasts {
+                    let verifying_key = &public_bundles[sender].unicast_sign;
+                    let verifying_key = ecdsa::VerifyingKey::from_public_key_der(verifying_key)?;
+                    *unicast = verify_message(unicast, &verifying_key)?;
+
+                    *unicast = ecies::decrypt(&private_bundle.unicast_decrypt, unicast).map_err(|_| "unicast compromised")?;
+                }
                 for (sender, broadcast) in &mut data.broadcasts {
                     let verifying_key = &public_bundles[sender].broadcast_sign;
                     let verifying_key = ecdsa::VerifyingKey::from_public_key_der(verifying_key)?;

@@ -18,6 +18,8 @@ use yasna;
 #[derive(der::Sequence)]
 pub struct MeeSignPrivateBundle {
     pub broadcast_sign: Vec<u8>,
+    pub unicast_sign: Vec<u8>,
+    pub unicast_decrypt: Vec<u8>,
 }
 
 impl MeeSignPrivateBundle {
@@ -29,6 +31,8 @@ impl MeeSignPrivateBundle {
 #[derive(der::Sequence)]
 pub struct MeeSignPublicBundle {
     pub broadcast_sign: Vec<u8>,
+    pub unicast_sign: Vec<u8>,
+    pub unicast_encrypt: Vec<u8>,
 }
 
 /// An OID from a testing namespace as documented here:
@@ -51,8 +55,8 @@ struct PrivateKeys {
 }
 
 pub fn gen_key_with_csr(name: &str) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
-    let key = SigningKey::random(&mut OsRng);
-    let key_der = key.to_pkcs8_der()?.as_bytes().to_vec();
+    let tls_key = SigningKey::random(&mut OsRng);
+    let tls_key_der = tls_key.to_pkcs8_der()?.as_bytes().to_vec();
 
     let bcast_key = SigningKey::random(&mut OsRng);
     let bcast_pub_key = bcast_key
@@ -62,21 +66,36 @@ pub fn gen_key_with_csr(name: &str) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>
         .to_vec();
     let bcast_key_der = bcast_key.to_pkcs8_der()?.as_bytes().to_vec();
 
+    let uni_sign_key = SigningKey::random(&mut OsRng);
+    let uni_sign_pub_key = uni_sign_key
+        .verifying_key()
+        .to_public_key_der()?
+        .as_bytes()
+        .to_vec();
+    let uni_sign_key_der = uni_sign_key.to_pkcs8_der()?.as_bytes().to_vec();
+
+    let (uni_dec_key, uni_enc_key) = ecies::utils::generate_keypair();
+    let (uni_dec_key, uni_enc_key) = (uni_dec_key.serialize(), uni_enc_key.serialize());
+
     let subject = Name::from_str(&format!("CN={name}"))?;
-    let mut builder = RequestBuilder::new(subject, &key)?;
+    let mut builder = RequestBuilder::new(subject, &tls_key)?;
     builder.add_extension(&MeeSignPublicBundle {
         broadcast_sign: bcast_pub_key,
+        unicast_sign: uni_sign_pub_key,
+        unicast_encrypt: uni_enc_key.into(),
     })?;
     let csr = builder.build::<DerSignature>()?;
     let csr_der = csr.to_der()?;
 
     let private_bundle = MeeSignPrivateBundle {
         broadcast_sign: bcast_key_der,
+        unicast_sign: uni_sign_key_der,
+        unicast_decrypt: uni_dec_key.into(),
     }
     .to_der()?;
 
     let keys_der = PrivateKeys {
-        tls: key_der,
+        tls: tls_key_der,
         bundle: private_bundle,
     }
     .to_der()?;
