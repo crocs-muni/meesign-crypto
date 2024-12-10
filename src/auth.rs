@@ -1,13 +1,15 @@
+use crate::proto::SignedMessage;
 use const_oid::{AssociatedOid, ObjectIdentifier};
 use der::{Decode, Encode};
-use p256::ecdsa::{DerSignature, SigningKey};
-use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use p256::ecdsa::{self, DerSignature, SigningKey, signature::Verifier as _};
+use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, DecodePublicKey};
 use rand::rngs::OsRng;
 use std::{error::Error, str::FromStr};
 use x509_cert::{
     builder::{Builder, RequestBuilder},
     ext::{AsExtension, Extension},
     name::Name,
+    Certificate,
 };
 use yasna;
 
@@ -144,4 +146,30 @@ pub fn cert_key_to_pkcs12(keys_der: &[u8], cert_der: &[u8]) -> Result<Vec<u8>, B
     }
     .to_der();
     Ok(pfx)
+}
+
+/// Extracts a DER-encoded MeeSignPublicBundle from a DER-encoded X.509 certificate
+pub fn extract_public_bundle_der(cert_der: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    Ok(Certificate::from_der(cert_der)?
+        .tbs_certificate
+        .extensions
+        .ok_or("certificate does not contain public bundle")?
+        .into_iter()
+        .find(|ext| ext.extn_id == MeeSignPublicBundle::OID)
+        .ok_or("certificate does not contain public bundle")?
+        .extn_value
+        .into_bytes())
+}
+
+/// Verifies a signed broadcast and extracts the message
+pub fn verify_broadcast(msg: &[u8], cert_der: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    use crate::proto::Message as _;
+    let public_bundle = extract_public_bundle_der(cert_der)?;
+    let public_bundle = MeeSignPublicBundle::from_der(&public_bundle)?;
+    let msg = SignedMessage::decode(msg)?;
+    let signature = ecdsa::Signature::from_slice(&msg.signature)?;
+    let key = ecdsa::VerifyingKey::from_public_key_der(&public_bundle.broadcast_sign)?;
+    key.verify(&msg.message, &signature)
+        .map_err(|_| "broadcast signature mismatch")?;
+    Ok(msg.message)
 }

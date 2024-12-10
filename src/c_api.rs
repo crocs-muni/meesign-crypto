@@ -14,7 +14,7 @@ use crate::protocol::gg18;
 #[cfg(feature = "protocol")]
 use crate::protocol::{self, KeygenProtocol, ThresholdProtocol};
 #[cfg(feature = "protocol")]
-use crate::security::{unpack_broadcast, ProtocolType, SecureLayer, State as SecureLayerState};
+use crate::security::{ProtocolType, SecureLayer, State as SecureLayerState};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -309,8 +309,6 @@ pub unsafe extern "C" fn encrypt(
 ) -> Buffer {
     let msg = unsafe { slice::from_raw_parts(msg_ptr, msg_len) };
     let key = unsafe { slice::from_raw_parts(key_ptr, key_len) };
-
-    let key = unpack_broadcast(&key);
 
     match elgamal::encrypt(msg, &key) {
         Ok(ciphertext) => ciphertext.into(),
