@@ -88,10 +88,19 @@ pub fn cert_key_to_pkcs12(keys_der: &[u8], cert_der: &[u8]) -> Result<Vec<u8>, B
         bundle,
     } = PrivateKeys::from_der(keys_der)?;
     let password = b"";
+
+    // The p12 library does not directly support the PKCS#12 features we need,
+    // so we have to construct some structures ourselves.
+    // In particular, we are using the KeyBag and SecretBag types described in
+    // RFC7292 Section 4.2.1 and Section 4.2.5 respectively.
+    // p12 also provides no direct way to use these Bags in the PFX, so we have to
+    // construct the container types (ContentInfo, SafeContents) as well.
+
     let tls_auth_friendly_name = p12::PKCS12Attribute::FriendlyName("meesign auth key".to_string());
     let contents = yasna::construct_der(|w| {
         w.write_sequence_of(|w| {
             p12::ContentInfo::Data(yasna::construct_der(|w| {
+                // RFC7292 Section 4.2: The SafeContents is made up of SafeBags.
                 w.write_sequence_of(|w| {
                     p12::SafeBag {
                         bag: p12::SafeBagKind::CertBag(p12::CertBag::X509(cert_der.to_vec())),
@@ -101,7 +110,8 @@ pub fn cert_key_to_pkcs12(keys_der: &[u8], cert_der: &[u8]) -> Result<Vec<u8>, B
                     p12::SafeBag {
                         bag: p12::SafeBagKind::OtherBagKind(p12::OtherBag {
                             bag_id: yasna::models::ObjectIdentifier::from_slice(&[
-                                1, 2, 840, 113549, 1, 12, 10, 1, 1, // KeyBag OID
+                                // RFC7292 Appendix D, Bag types: KeyBag OID
+                                1, 2, 840, 113549, 1, 12, 10, 1, 1,
                             ]),
                             bag_value: key_der.to_vec(),
                         }),
@@ -111,7 +121,8 @@ pub fn cert_key_to_pkcs12(keys_der: &[u8], cert_der: &[u8]) -> Result<Vec<u8>, B
                     p12::SafeBag {
                         bag: p12::SafeBagKind::OtherBagKind(p12::OtherBag {
                             bag_id: yasna::models::ObjectIdentifier::from_slice(&[
-                                1, 2, 840, 113549, 1, 12, 10, 1, 5, // SecretBag OID
+                                // RFC7292 Appendix D, Bag types: SecretBag OID
+                                1, 2, 840, 113549, 1, 12, 10, 1, 5,
                             ]),
                             bag_value: bundle,
                         }),
