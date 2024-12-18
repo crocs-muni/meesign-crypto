@@ -7,6 +7,7 @@ pub mod gg18;
 #[cfg(feature = "musig2meesign")]
 pub mod musig2meesign;
 
+mod signer;
 mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
