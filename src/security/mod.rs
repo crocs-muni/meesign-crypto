@@ -1,5 +1,7 @@
 use crate::auth::{extract_public_bundle_der, MeeSignPrivateBundle, MeeSignPublicBundle};
-use crate::proto::{self, ClientMessage, ProtocolGroupInit, ProtocolInit, ServerMessage, SignedMessage};
+use crate::proto::{
+    self, ClientMessage, ProtocolGroupInit, ProtocolInit, ServerMessage, SignedMessage,
+};
 use crate::protocol::{Protocol, Recipient, Result};
 use der::{self, Decode as _};
 use p256::ecdsa;
@@ -57,7 +59,8 @@ fn secure_message(
         let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
         for (recipient, unicast) in &mut message.unicasts {
             let enc_key = &public_bundles[recipient].unicast_encrypt;
-            let encrypted = ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
+            let encrypted =
+                ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
             let signature: ecdsa::Signature = sign_key.sign(&encrypted);
             *unicast = SignedMessage {
                 message: encrypted,
@@ -164,7 +167,7 @@ impl SecureLayer {
         };
 
         Self {
-            participant_indices: Vec::new(),  // NOTE: initialized in round 0
+            participant_indices: Vec::new(),      // NOTE: initialized in round 0
             share_indices: vec![0; shares.len()], // NOTE: initialized in round 0
             shares: shares
                 .into_iter()
@@ -201,14 +204,14 @@ impl SecureLayer {
                 }
                 .encode_to_vec();
                 (State::Init, ack, Recipient::Server)
-            },
+            }
             State::Init => {
                 if let Ok(pgi) = ProtocolGroupInit::decode(data) {
                     let index_offset = match self.protocol_type {
                         ProtocolType::Frost => 1,
                         _ => 0,
                     };
-                    self.participant_indices = (index_offset..pgi.parties+index_offset).collect();
+                    self.participant_indices = (index_offset..pgi.parties + index_offset).collect();
                     self.share_indices[share_idx] = pgi.index;
                 } else if let Ok(pi) = ProtocolInit::decode(data) {
                     self.participant_indices = pi.indices;
@@ -220,7 +223,7 @@ impl SecureLayer {
                 let (data, recipient) = protocol.advance(&data)?;
 
                 finalize_round(data, recipient, &private_bundle, &public_bundles)?
-            },
+            }
             State::BroadcastExchange => {
                 let data_dec = ServerMessage::decode(data)?;
                 let mut original_msgs = HashMap::new();
@@ -232,20 +235,28 @@ impl SecureLayer {
                 }
                 assert_eq!(data_dec.unicasts.len(), 0);
 
-                let bcast_sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
+                let bcast_sign_key =
+                    ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
                 let signature: ecdsa::Signature = bcast_sign_key.sign(data);
-                let data = ClientMessage{
+                let data = ClientMessage {
                     unicasts: HashMap::new(),
-                    broadcast: Some(SignedMessage {
-                        message: data.to_vec(),
-                        signature: signature.to_vec(),
-                    }.encode_to_vec()),
+                    broadcast: Some(
+                        SignedMessage {
+                            message: data.to_vec(),
+                            signature: signature.to_vec(),
+                        }
+                        .encode_to_vec(),
+                    ),
                     protocol_type: self.protocol_type.into(),
                 }
                 .encode_to_vec();
 
-                (State::BroadcastCheck(original_msgs), data, Recipient::Server)
-            },
+                (
+                    State::BroadcastCheck(original_msgs),
+                    data,
+                    Recipient::Server,
+                )
+            }
             State::BroadcastCheck(original_msgs) => {
                 let data = ServerMessage::decode(data)?;
                 assert!(!data.broadcasts.contains_key(&self.share_indices[share_idx]));
@@ -262,7 +273,10 @@ impl SecureLayer {
                 for (relayer, relayed_msgs) in &data.broadcasts {
                     let relayed_msgs = verify_message(relayed_msgs, &sign_pub_keys[relayer])?;
                     let relayed_msgs = ServerMessage::decode(relayed_msgs.as_slice())?;
-                    assert_eq!(relayed_msgs.broadcasts.len(), self.participant_indices.len() - 1);
+                    assert_eq!(
+                        relayed_msgs.broadcasts.len(),
+                        self.participant_indices.len() - 1
+                    );
 
                     for (sender, relayed_msg) in &relayed_msgs.broadcasts {
                         let relayed_msg = verify_message(relayed_msg, &sign_pub_keys[sender])?;
@@ -270,7 +284,10 @@ impl SecureLayer {
                         if sender == relayer || *sender == self.share_indices[share_idx] {
                             continue;
                         }
-                        if !original_msgs.get(sender).is_some_and(|msg| msg == &relayed_msg) {
+                        if !original_msgs
+                            .get(sender)
+                            .is_some_and(|msg| msg == &relayed_msg)
+                        {
                             return Err("broadcast compromised".into());
                         }
                     }
@@ -287,12 +304,12 @@ impl SecureLayer {
                 let (data, recipient) = protocol.advance(&data)?;
 
                 finalize_round(data, recipient, &private_bundle, &public_bundles)?
-            },
+            }
             State::CardResponse => {
                 let (data, recipient) = protocol.advance(&data)?;
 
                 finalize_round(data, recipient, &private_bundle, &public_bundles)?
-            },
+            }
             State::Running => {
                 let mut data = ServerMessage::decode(data)?;
                 for (sender, unicast) in &mut data.unicasts {
@@ -300,7 +317,8 @@ impl SecureLayer {
                     let verifying_key = ecdsa::VerifyingKey::from_public_key_der(verifying_key)?;
                     *unicast = verify_message(unicast, &verifying_key)?;
 
-                    *unicast = ecies::decrypt(&private_bundle.unicast_decrypt, unicast).map_err(|_| "unicast compromised")?;
+                    *unicast = ecies::decrypt(&private_bundle.unicast_decrypt, unicast)
+                        .map_err(|_| "unicast compromised")?;
                 }
                 for (sender, broadcast) in &mut data.broadcasts {
                     let verifying_key = &public_bundles[sender].broadcast_sign;

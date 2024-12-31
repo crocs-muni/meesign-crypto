@@ -1,8 +1,8 @@
 use crate::proto::SignedMessage;
 use const_oid::{AssociatedOid, ObjectIdentifier};
 use der::{Decode, Encode};
-use p256::ecdsa::{self, DerSignature, SigningKey, signature::Verifier as _};
-use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, DecodePublicKey};
+use p256::ecdsa::{self, signature::Verifier as _, DerSignature, SigningKey};
+use p256::pkcs8::{DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rand::rngs::OsRng;
 use std::{error::Error, str::FromStr};
 use x509_cert::{
@@ -38,8 +38,7 @@ pub struct MeeSignPublicBundle {
 /// An OID from a testing namespace as documented here:
 /// https://web.archive.org/web/20100430054707/http://www.imc.org/ietf-pkix/pkix-oid.asn
 impl AssociatedOid for MeeSignPublicBundle {
-    const OID: ObjectIdentifier =
-        ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.13.9939");
+    const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.13.9939");
 }
 
 impl AsExtension for MeeSignPublicBundle {

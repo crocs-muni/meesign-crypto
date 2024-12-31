@@ -316,8 +316,7 @@ mod tests {
                     .choose_multiple(&mut OsRng, threshold)
                     .into_iter()
                     .collect();
-                let results =
-                    <SignContext as ThresholdProtocolTest>::run(ctxs, dgst.to_vec());
+                let results = <SignContext as ThresholdProtocolTest>::run(ctxs, dgst.to_vec());
 
                 let signature = results[0].clone();
 
