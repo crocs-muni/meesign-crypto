@@ -1,8 +1,10 @@
+pub mod signer;
+
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
 
 use signer::Signer;
-use musig2::CompactSignature;
+use ::musig2::CompactSignature;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -22,17 +24,18 @@ pub(crate) struct KeygenContext {
 #[derive(Serialize, Deserialize)]
 enum KeygenRound {
     R0,
+    R0AwaitKeyFromCard(Setup, Signer), // Get public key from card
     R1(Setup, Signer), // Setup and skey share of the user
     Done(Setup, Signer),
 }
 
 impl KeygenContext {
-    //pub fn with_card() -> Self {
-    //    Self {
-    //        round: KeygenRound::R0,
-    //        with_card: false, //TODO: Change when card is implemented
-    //    }
-    //}
+    pub fn with_card() -> Self {
+        Self {
+            round: KeygenRound::R0,
+            with_card: true, 
+        }
+    }
 
     fn init(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let msg = ProtocolGroupInit::decode(data)?;
@@ -64,6 +67,9 @@ impl KeygenContext {
     fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let (c, data, rec) = match &mut self.round {
             KeygenRound::R0 => return Err("protocol not initialized".into()),
+            KeygenRound::R0AwaitKeyFromCard(setup, signer) => {
+                jc::response::setup(data)?;
+            }
             KeygenRound::R1(setup, signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
                 let pub_keys_hashmap = deserialize_map(&data)?;
@@ -301,7 +307,7 @@ impl ThresholdProtocol for SignContext {
 mod tests {
     use super::*;
     use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
-    use musig2::CompactSignature;
+    use ::musig2::CompactSignature;
     use secp256k1::PublicKey;
 
     impl KeygenProtocolTest for KeygenContext {
@@ -344,8 +350,6 @@ mod tests {
 
             let ctxs = ctxs
                 .into_iter()
-            //    .choose_multiple(&mut OsRng, parties)
-            //    .into_iter()
                 .collect();
             let results =
                 <SignContext as ThresholdProtocolTest>::run(ctxs, msg.to_vec());
@@ -356,8 +360,275 @@ mod tests {
                 assert_eq!(signature, serde_json::from_slice(&result).unwrap());
             }
 
-            assert!(musig2::verify_single(pk, signature, msg).is_ok());
+            assert!(::musig2::verify_single(pk, signature, msg).is_ok());
         }
     }
 }
 
+mod jc {
+    mod util {
+        use crate::protocol::Result;
+        use k256::{
+            elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
+            AffinePoint, EncodedPoint,
+        };
+
+        pub fn reencode_point(ser: &[u8], compress: bool) -> Result<Box<[u8]>> {
+            let encoded = EncodedPoint::from_bytes(ser)?;
+            match Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&encoded)) {
+                Some(affine) => Ok(affine.to_encoded_point(compress).to_bytes()),
+                None => Err("Invalid point".into()),
+            }
+        }
+    }
+
+    pub mod command {
+        use secp256k1::PublicKey;
+
+        use super::util::reencode_point;
+        use crate::protocol::apdu::CommandBuilder;
+
+        const SCALAR_LEN: usize = 32;
+        const POINT_LEN : usize = 33;
+
+        const CLA: u8 = 0xA6;
+
+        const INS_GENERATE_KEYS: u8 = 0xBB;
+        const INS_GENERATE_NONCES: u8 = 0x5E;
+        const INS_SIGN: u8 = 0x49;
+
+        const INS_GET_XONLY_PUBKEY: u8 = 0x8B;
+        const INS_GET_PLAIN_PUBKEY: u8 = 0x5A;
+        const INS_GET_PNONCE_SHARE: u8 = 0x35;
+
+        const INS_SET_AGG_PUBKEY: u8 = 0x76;
+        const INS_SET_AGG_NONCES: u8 = 0x9A;
+
+        pub fn keygen() -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_GENERATE_KEYS)
+                .build()
+        }
+
+        pub fn get_plain_pubkey() -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_GET_PLAIN_PUBKEY)
+                .build()
+        }
+
+        pub fn set_aggpubkey(aggkey_q: PublicKey, gacc: u8, tacc: u8, coef_a: [u8; SCALAR_LEN]) -> Vec<u8> {
+
+            let mut gacc_array = [0; SCALAR_LEN];
+            gacc_array[SCALAR_LEN - 1] = gacc;
+
+            let mut tacc_array = [0; SCALAR_LEN];
+            tacc_array[SCALAR_LEN - 1] = tacc;
+
+            CommandBuilder::new(CLA, INS_SET_AGG_PUBKEY)
+                .extend(&reencode_point(&aggkey_q.serialize(), true).unwrap())
+                .extend(&gacc_array)
+                .extend(&tacc_array)
+                .extend(&coef_a)
+                .build()
+        }
+
+        pub fn noncegen() -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_GENERATE_NONCES)
+                .build()
+        }
+
+        pub fn get_pubnonce() -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_GET_PNONCE_SHARE)
+                .build()
+        }
+
+        pub fn set_agg_nonces(pubnonces: &[PublicKey; 2]) -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_SET_AGG_NONCES)
+                .extend(&reencode_point(&pubnonces[0].serialize(), true).unwrap())
+                .extend(&reencode_point(&pubnonces[1].serialize(), true).unwrap())
+                .build()
+        }
+
+        pub fn sign(message: &[u8]) -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_SIGN)
+                .extend(message)
+                .build()
+        }
+    }
+
+    pub mod response {
+        use musig2::CompactSignature;
+        use secp256k1::PublicKey;
+
+        use super::util::reencode_point;
+        use crate::protocol::apdu::parse_response;
+        use crate::protocol::Result;
+        use std::convert::TryInto;
+
+        pub fn keygen(raw: &[u8]) -> Result<()> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
+        pub fn get_plain_pubkey(raw: &[u8]) -> Result<PublicKey> {
+            let data = parse_response(raw)?;
+            let pubkey = PublicKey::from_slice(&reencode_point(data, false)?)?;
+            Ok(pubkey)
+        }
+
+        pub fn set_aggpubkey(raw: &[u8]) -> Result<()> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
+        pub fn noncegen(raw: &[u8]) -> Result<()> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
+        pub fn get_pubnonce(raw: &[u8]) -> Result<[PublicKey; 2]> {
+            let data = parse_response(raw)?;
+            let pubkey = data.split_at(data.len() / 2);
+            let pubkey = [
+                PublicKey::from_slice(&reencode_point(pubkey.0, false)?)?,
+                PublicKey::from_slice(&reencode_point(pubkey.1, false)?)?,
+            ];
+
+            Ok(pubkey)
+        }
+
+        pub fn set_agg_nonces(raw: &[u8]) -> Result<()> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
+        pub fn sign(raw: &[u8]) -> Result<CompactSignature> {
+            let data = parse_response(raw)?;
+            let signature = CompactSignature::from_bytes(&data)?;
+            Ok(signature)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::{
+            collections::{BTreeMap, HashMap},
+            convert::TryFrom,
+            error::Error,
+        };
+
+        use crate::protocol::apdu::{parse_response, CommandBuilder};
+
+        use super::{super::musig2, command, response};
+        use pcsc;
+        use rand::rngs::OsRng;
+        use secp256k1::PublicKey;
+        use ::musig2::PartialSignature;
+
+        #[test]
+        fn sign_card() -> Result<(), Box<dyn Error>> {
+            // connect to card
+            let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
+            let mut readers_buf = [0; 2048];
+            let reader = ctx
+                .list_readers(&mut readers_buf)?
+                .next()
+                .ok_or("no reader")?;
+            let card = ctx.connect(reader, pcsc::ShareMode::Shared, pcsc::Protocols::ANY)?;
+            let mut resp_buf = [0; pcsc::MAX_BUFFER_SIZE];
+
+            // select MUSIG2
+            let aid = b"\x01\xff\xff\x04\x05\x06\x07\x08\x11\x01";
+            let select = CommandBuilder::new(0x00, 0xa4).p1(0x04).extend(aid).build();
+            let resp = card.transmit(&select, &mut resp_buf)?;
+            parse_response(resp)?;
+
+            // Must equal
+            let t: u8 = 3;
+            let n: u8 = 3;
+            let tacc: u8 = 0;
+            let gacc: u8 = 1;
+            let mut pubkeys: [PublicKey; 3];
+            let mut pupnonces: [[PublicKey; 2]; 3];
+            let mut pubshares: [PartialSignature; 3];
+            let mut signers: [musig2::Signer; 3];
+
+            // keygen
+            let cmd = command::keygen();
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            response::keygen(resp)?;
+
+            // get pubkey
+            let cmd = command::get_plain_pubkey();
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            let card_pubkey = response::get_plain_pubkey(resp)?;
+
+            // Initialize signers
+            signers[0] = musig2::Signer::new_from_card(card_pubkey);
+
+            for i in 1..(n) {
+                signers[i as usize] = musig2::Signer::new();
+            }
+
+            // Get pubkeys
+            let mut pubkey_array: Vec<Vec<u8>> = Vec::new();
+            
+            for i in 0..n {
+                pubkey_array.push(signers[i as usize].pubkey_serialized());
+            }
+
+            // sort and assign public keys
+            for i in 0..n {
+                let local_pubkeys = pubkey_array.clone().remove(i as usize);
+                signers[i as usize].generate_key_agg_ctx_serialized(pubkey_array, None, false);
+            }
+
+            // set agg pubkey
+            let agg_pubkey = signers[0].get_agg_pubkey();
+            let cmd = command::set_aggpubkey(agg_pubkey, gacc, tacc, signers[0].get_coef_a().serialize());
+
+            // Generate nonces
+            let cmd = command::noncegen();
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            response::noncegen(resp)?;
+
+            for i in 1..n {
+                signers[i as usize].first_round();
+            }
+
+            // Get pubnonces
+            
+
+            for (id, key_pkg) in &key_pkgs { 
+                let (nonces, commitments) =
+                    frost::round1::commit(key_pkg.signing_share(), &mut OsRng);
+                nonces_map.insert(*id, nonces);
+                commitments_map.insert(*id, commitments);
+            }
+
+            // commitments
+            for (i, commitments) in commitments_map.values().enumerate() {
+                let cmd = command::commitment((i + 1) as u8, commitments);
+                let resp = card.transmit(&cmd, &mut resp_buf)?;
+                response::commitment(resp)?;
+            }
+
+            // sign
+            let message = vec![0xff; 16];
+            let signing_package = frost::SigningPackage::new(commitments_map, &message);
+
+            let cmd = command::sign(&message);
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            let card_share = response::sign(resp)?;
+
+            let mut share_map = BTreeMap::new();
+            share_map.insert(card_id, card_share);
+            for (id, key_pkg) in &key_pkgs {
+                let share = frost::round2::sign(&signing_package, &nonces_map[id], key_pkg)?;
+                share_map.insert(*id, share);
+            }
+
+            frost::aggregate(&signing_package, &share_map, &pubkey_pkg)?;
+
+            Ok(())
+        }
+    }
+}

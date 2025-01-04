@@ -4,10 +4,9 @@ pub mod elgamal;
 pub mod frost;
 #[cfg(feature = "gg18")]
 pub mod gg18;
-#[cfg(feature = "musig2meesign")]
-pub mod musig2meesign;
+#[cfg(feature = "musig2")]
+pub mod musig2;
 
-mod signer;
 mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

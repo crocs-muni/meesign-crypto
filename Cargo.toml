@@ -42,10 +42,10 @@ pcsc = "2.8.0"
 sha2 = "0.10.7"
 
 [features]
-default = ["gg18", "frost", "elgamal", "bindings", "musig2meesign"]
+default = ["gg18", "frost", "elgamal", "bindings", "musig2"]
 protocol = []
 bindings = []
 gg18 = ["protocol", "dep:mpecdsa"]
 frost = ["protocol", "dep:frost-secp256k1"]
 elgamal = ["protocol", "dep:elastic-elgamal"]
-musig2meesign = ["protocol", "dep:musig2"]
+musig2 = ["protocol", "dep:musig2"]

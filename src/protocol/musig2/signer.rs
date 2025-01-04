@@ -1,7 +1,7 @@
 use core::panic;
 
 use musig2::{CompactSignature, FirstRound, KeyAggContext, PartialSignature, PubNonce, SecondRound};
-use musig2::secp::Scalar;
+use musig2::secp::{MaybeScalar, Scalar};
 use rand::RngCore;
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -12,14 +12,23 @@ use rand::rngs::OsRng;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Signer {
-    keypair: Keypair, // Pair of shares
+    // Public key share
+    pubkey: PublicKey,
+    // Private key share
+    seckey: Option<SecretKey>,
     key_agg_ctx: Option<KeyAggContext>,
-    index: Option<usize>, // Index of the signer
-    agg_signature: Option<CompactSignature>, // Aggregated signature
-    sec_nonce: Option<[u8; 32]>, // Secret nonce
-    pub_nonces: Option<Vec<(usize, Vec<u8>)>>, // Pub nonces
-    partial_signatures: Option<Vec<(usize, PartialSignature)>>, // Partial signatures
-    message: Option<Vec<u8>>, // Message to be signed
+    // Index of the signer
+    index: Option<usize>,
+    // Aggregated signature
+    agg_signature: Option<CompactSignature>, 
+    // Secret nonce
+    sec_nonce: Option<[u8; 32]>, 
+    // Pub nonces
+    pub_nonces: Option<Vec<(usize, Vec<u8>)>>, 
+    // Partial signatures
+    partial_signatures: Option<Vec<(usize, PartialSignature)>>, 
+    // Message to be signed
+    message: Option<Vec<u8>>, 
 }
 
 impl Signer {
@@ -28,9 +37,28 @@ impl Signer {
         let secp = Secp256k1::new();
         let mut rng = OsRng::default();
         let pair = secp.generate_keypair(&mut rng); 
+        let keypair = Keypair::from_secret_key(&secp, &pair.0);
 
         Self {
-            keypair: Keypair::from_secret_key(&secp, &pair.0),
+            pubkey: keypair.public_key(),
+            seckey: Some(keypair.secret_key()),
+            key_agg_ctx: None,
+            index: None,
+            agg_signature: None,
+            sec_nonce: None,
+            pub_nonces: None,
+            message: None,
+            partial_signatures: None,
+        }
+    }
+
+    pub fn new_from_card(pubkey: PublicKey) -> Self {
+        
+        let pubkey = pubkey;
+
+        Self {
+            pubkey: pubkey,
+            seckey: None,
             key_agg_ctx: None,
             index: None,
             agg_signature: None,
@@ -94,12 +122,16 @@ impl Signer {
 
     // Share public key
     fn pubkey(&self) -> PublicKey {
-        return self.keypair.public_key();
+        return self.pubkey;
     }
 
     // Share secret key
     fn seckey(&self) -> SecretKey {
-        return self.keypair.secret_key();
+
+        match self.seckey {
+            None => panic!("Secret key not set"),
+            Some(seckey) => return seckey,
+        }
     }
 
     fn generate_key_agg_ctx(&mut self, all_pubkeys: Vec<PublicKey>, tweak: Option<[u8;32]>, xonly: bool) {
@@ -132,6 +164,14 @@ impl Signer {
     pub fn get_agg_pubkey(&self) -> PublicKey {
         if let Some(ctx) = self.key_agg_ctx.as_ref() {
             return ctx.aggregated_pubkey();
+        } else {
+            panic!("Aggregated public key not initialized.");
+        }
+    }
+
+    pub fn get_coef_a(&self) -> MaybeScalar {
+        if let Some(ctx) = self.key_agg_ctx.as_ref() {
+            return ctx.key_coefficient(self.pubkey()).unwrap();
         } else {
             panic!("Aggregated public key not initialized.");
         }

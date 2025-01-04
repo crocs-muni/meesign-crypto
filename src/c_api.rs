@@ -11,8 +11,8 @@ use crate::protocol::elgamal;
 use crate::protocol::frost;
 #[cfg(feature = "gg18")]
 use crate::protocol::gg18;
-#[cfg(feature = "musig2meesign")]
-use crate::protocol::musig2meesign;
+#[cfg(feature = "musig2")]
+use crate::protocol::musig2;
 #[cfg(feature = "protocol")]
 use crate::protocol::{self, KeygenProtocol, ThresholdProtocol};
 #[cfg(feature = "protocol")]
@@ -233,8 +233,8 @@ pub unsafe extern "C" fn protocol_init(
             ProtocolId::Elgamal => Box::new(elgamal::DecryptContext::new(share_ser)),
             #[cfg(feature = "frost")]
             ProtocolId::Frost => Box::new(frost::SignContext::new(share_ser)),
-            #[cfg(feature = "musig2meesign")]
-            ProtocolId::Musig2 => Box::new(musig2meesign::SignContext::new(share_ser)),
+            #[cfg(feature = "musig2")]
+            ProtocolId::Musig2 => Box::new(musig2::SignContext::new(share_ser)),
             #[cfg(not(all(feature = "gg18", feature = "elgamal", feature = "frost")))]
             _ => panic!("Protocol not supported"),
         }
