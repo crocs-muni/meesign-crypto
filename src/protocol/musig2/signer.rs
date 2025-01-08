@@ -152,7 +152,6 @@ impl Signer {
             Some(tweak) => {
                 let tweak_scalar = Scalar::from_slice(&tweak).unwrap();
                 ctx = ctx.with_tweak(tweak_scalar, xonly).unwrap();
-
             }
             None => {}
         }
@@ -217,7 +216,7 @@ impl Signer {
         }
     }
 
-    fn get_pubnonce(&mut self) -> Result<PubNonce, String> {
+    pub fn get_pubnonce(&mut self) -> Result<PubNonce, String> {
         
         let first_round = self.first_round_internal();
 
@@ -278,7 +277,7 @@ impl Signer {
         self.pub_nonces = Some(pubnonces.clone());
     }
 
-    fn get_partial_signature(&mut self) -> PartialSignature {
+    pub fn get_partial_signature(&mut self) -> PartialSignature {
 
         let second_round = match self.second_round_internal() {
             Ok(sr) => sr,

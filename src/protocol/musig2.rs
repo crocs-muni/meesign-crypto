@@ -24,7 +24,7 @@ pub(crate) struct KeygenContext {
 #[derive(Serialize, Deserialize)]
 enum KeygenRound {
     R0,
-    R0AwaitKeyFromCard(Setup, Signer), // Get public key from card
+    //R0AwaitKeyFromCard(Setup, Signer), // Get public key from card
     R1(Setup, Signer), // Setup and skey share of the user
     Done(Setup, Signer),
 }
@@ -67,9 +67,6 @@ impl KeygenContext {
     fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let (c, data, rec) = match &mut self.round {
             KeygenRound::R0 => return Err("protocol not initialized".into()),
-            KeygenRound::R0AwaitKeyFromCard(setup, signer) => {
-                jc::response::setup(data)?;
-            }
             KeygenRound::R1(setup, signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
                 let pub_keys_hashmap = deserialize_map(&data)?;
@@ -380,9 +377,19 @@ mod jc {
                 None => Err("Invalid point".into()),
             }
         }
+
+        // By GitHub Copilot
+        pub fn vec_removed<T: Clone>(vec: &Vec<T>, index: usize) -> Vec<T> {
+            vec.iter()
+                .enumerate()
+                .filter(|&(i, _)| i != index)
+                .map(|(_, item)| item.clone())
+                .collect()
+        }
     }
 
     pub mod command {
+        use musig2::{AggNonce, PubNonce};
         use secp256k1::PublicKey;
 
         use super::util::reencode_point;
@@ -440,10 +447,9 @@ mod jc {
                 .build()
         }
 
-        pub fn set_agg_nonces(pubnonces: &[PublicKey; 2]) -> Vec<u8> {
+        pub fn set_agg_nonces(aggnonce: &AggNonce) -> Vec<u8> {
             CommandBuilder::new(CLA, INS_SET_AGG_NONCES)
-                .extend(&reencode_point(&pubnonces[0].serialize(), true).unwrap())
-                .extend(&reencode_point(&pubnonces[1].serialize(), true).unwrap())
+                .extend(&reencode_point(&aggnonce.serialize(), true).unwrap())
                 .build()
         }
 
@@ -455,7 +461,7 @@ mod jc {
     }
 
     pub mod response {
-        use musig2::CompactSignature;
+        use musig2::{CompactSignature, PartialSignature, PubNonce};
         use secp256k1::PublicKey;
 
         use super::util::reencode_point;
@@ -484,15 +490,10 @@ mod jc {
             Ok(())
         }
 
-        pub fn get_pubnonce(raw: &[u8]) -> Result<[PublicKey; 2]> {
+        pub fn get_pubnonce(raw: &[u8]) -> Result<PubNonce> {
             let data = parse_response(raw)?;
-            let pubkey = data.split_at(data.len() / 2);
-            let pubkey = [
-                PublicKey::from_slice(&reencode_point(pubkey.0, false)?)?,
-                PublicKey::from_slice(&reencode_point(pubkey.1, false)?)?,
-            ];
-
-            Ok(pubkey)
+            let pubnonce = PubNonce::from_bytes(&data)?;
+            Ok(pubnonce)
         }
 
         pub fn set_agg_nonces(raw: &[u8]) -> Result<()> {
@@ -500,9 +501,9 @@ mod jc {
             Ok(())
         }
 
-        pub fn sign(raw: &[u8]) -> Result<CompactSignature> {
+        pub fn sign(raw: &[u8]) -> Result<PartialSignature> {
             let data = parse_response(raw)?;
-            let signature = CompactSignature::from_bytes(&data)?;
+            let signature = PartialSignature::from_slice(data)?;
             Ok(signature)
         }
     }
@@ -517,11 +518,14 @@ mod jc {
 
         use crate::protocol::apdu::{parse_response, CommandBuilder};
 
-        use super::{super::musig2, command, response};
+        use super::{super::musig2, command::{self, sign}, response};
         use pcsc;
         use rand::rngs::OsRng;
         use secp256k1::PublicKey;
-        use ::musig2::PartialSignature;
+        use ::musig2::{secp::MaybeScalar, AggNonce, PartialSignature, PubNonce};
+        use serde::Serialize;
+
+        use super::util::vec_removed;
 
         #[test]
         fn sign_card() -> Result<(), Box<dyn Error>> {
@@ -546,10 +550,9 @@ mod jc {
             let n: u8 = 3;
             let tacc: u8 = 0;
             let gacc: u8 = 1;
-            let mut pubkeys: [PublicKey; 3];
-            let mut pupnonces: [[PublicKey; 2]; 3];
-            let mut pubshares: [PartialSignature; 3];
-            let mut signers: [musig2::Signer; 3];
+            let message = "Testing message";
+
+            let mut signers: [musig2::Signer; 3] = [musig2::Signer::new(), musig2::Signer::new(), musig2::Signer::new()];
 
             // keygen
             let cmd = command::keygen();
@@ -569,64 +572,99 @@ mod jc {
             }
 
             // Get pubkeys
-            let mut pubkey_array: Vec<Vec<u8>> = Vec::new();
-            
-            for i in 0..n {
-                pubkey_array.push(signers[i as usize].pubkey_serialized());
-            }
+            let pubkeys: Vec<Vec<u8>> = signers
+                .iter()
+                .map(|s| s.pubkey_serialized())
+                .collect();
 
-            // sort and assign public keys
+            // sort and assign public key
             for i in 0..n {
-                let local_pubkeys = pubkey_array.clone().remove(i as usize);
-                signers[i as usize].generate_key_agg_ctx_serialized(pubkey_array, None, false);
+                let pubkeys_wo_i = vec_removed(&pubkeys, i as usize);
+                signers[i as usize].generate_key_agg_ctx_serialized(pubkeys_wo_i, None, false);
             }
 
             // set agg pubkey
             let agg_pubkey = signers[0].get_agg_pubkey();
             let cmd = command::set_aggpubkey(agg_pubkey, gacc, tacc, signers[0].get_coef_a().serialize());
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            response::set_aggpubkey(resp)?;
 
-            // Generate nonces
+            // Generate and combine (first round) nonces
             let cmd = command::noncegen();
             let resp = card.transmit(&cmd, &mut resp_buf)?;
             response::noncegen(resp)?;
 
-            for i in 1..n {
-                signers[i as usize].first_round();
-            }
-
-            // Get pubnonces
-            
-
-            for (id, key_pkg) in &key_pkgs { 
-                let (nonces, commitments) =
-                    frost::round1::commit(key_pkg.signing_share(), &mut OsRng);
-                nonces_map.insert(*id, nonces);
-                commitments_map.insert(*id, commitments);
-            }
-
-            // commitments
-            for (i, commitments) in commitments_map.values().enumerate() {
-                let cmd = command::commitment((i + 1) as u8, commitments);
-                let resp = card.transmit(&cmd, &mut resp_buf)?;
-                response::commitment(resp)?;
-            }
-
-            // sign
-            let message = vec![0xff; 16];
-            let signing_package = frost::SigningPackage::new(commitments_map, &message);
-
-            let cmd = command::sign(&message);
+            // Get pubnonce of this card
+            let cmd = command::get_pubnonce();
             let resp = card.transmit(&cmd, &mut resp_buf)?;
-            let card_share = response::sign(resp)?;
+            let pubnonce_card = response::get_pubnonce(resp)?;
+            let pubnonce_card_serialized = pubnonce_card.serialize().to_vec();
 
-            let mut share_map = BTreeMap::new();
-            share_map.insert(card_id, card_share);
-            for (id, key_pkg) in &key_pkgs {
-                let share = frost::round2::sign(&signing_package, &nonces_map[id], key_pkg)?;
-                share_map.insert(*id, share);
+            // Generate and get pubnonces of other signers
+            for i in 1..n {
+                signers[i as usize].first_round(); // TODO: Synchronize noncegen on card and on client
             }
 
-            frost::aggregate(&signing_package, &share_map, &pubkey_pkg)?;
+            // Combine nonces (second round)
+            let mut pubnonces: Vec<PubNonce> = Vec::new();
+            let mut pubnonces_serialized: Vec<(usize, Vec<u8>)> = Vec::new();
+            pubnonces.push(pubnonce_card);
+            pubnonces_serialized.push((signers[0].get_index(), pubnonce_card_serialized));
+
+            for i in 1..n {
+                pubnonces.push(signers[i as usize].get_pubnonce()?);
+                pubnonces_serialized.push((signers[i as usize].get_index(), signers[i as usize].get_pubnonce()?.serialize().to_vec()));
+            }
+
+            // Compute aggnonce (second round). Only for the card.
+            let aggnonce: AggNonce = pubnonces.iter().sum(); // Same as in the Musig2 API
+
+            // Load aggnonce onto the card
+            let cmd = command::set_agg_nonces(&aggnonce);
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            response::set_agg_nonces(resp)?;
+
+            // Do second round on other signers
+            for i in 1..n {
+                let mut pubnonces_filtered = pubnonces_serialized.clone();
+                pubnonces_filtered.remove(i as usize);
+                signers[i as usize].second_round(&message.as_bytes().to_vec(), pubnonces_filtered);
+            }
+
+            // Partial signatures
+            let mut partial_sigs: Vec<PartialSignature> = Vec::new();
+
+            // Get partial signature of the card
+            let cmd = command::sign(message.as_bytes());
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            let partial_sig_card = response::sign(resp)?;
+            partial_sigs.push(partial_sig_card);
+
+            // Get partial signature of other cards
+            for i in 1..n {
+                partial_sigs.push(signers[i as usize].get_partial_signature());
+            }
+
+            let partial_sigs_with_index: Vec<(usize, Vec<u8>)> = signers
+                .iter_mut()
+                .map(|signer| (signer.get_index(), signer.get_partial_signature_serialized()))
+                .collect();
+
+
+            // Combine partial signatures (all signers)
+            for i in 0..n {
+
+                // TODO: Wont work for the card signer object
+                signers[i as usize].receive_partial_signatures(
+                    vec_removed(&partial_sigs_with_index, i as usize)
+                );
+            }
+
+            // Check signature by all signers
+            for i in 0..n {
+                let signature = signers[i as usize].get_agg_signature()?;
+                assert!(::musig2::verify_single(signers[i as usize].get_agg_pubkey(), signature, message.as_bytes()).is_ok());
+            }
 
             Ok(())
         }
