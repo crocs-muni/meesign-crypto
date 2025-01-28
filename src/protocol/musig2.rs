@@ -1,10 +1,13 @@
 pub mod signer;
 
+use std::convert::TryInto;
+
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
 
+use secp256k1::PublicKey;
 use signer::Signer;
-use ::musig2::CompactSignature;
+use ::musig2::{CompactSignature, PartialSignature, PubNonce};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +60,7 @@ impl KeygenContext {
         // Key share pair generated
         let signer: Signer = Signer::new();
 
-        let public_key_share = signer.pubkey_serialized();
+        let public_key_share = signer.pubkey().serialize().to_vec();
 
         let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
         self.round = KeygenRound::R1(setup, signer);
@@ -72,10 +75,17 @@ impl KeygenContext {
                 let pub_keys_hashmap = deserialize_map(&data)?;
 
                 // Get public key shares of all signers
-                let pub_key_shares: Vec<Vec<u8>> = pub_keys_hashmap.values().cloned().collect();
+                let pub_key_shares: Vec<PublicKey> = pub_keys_hashmap
+                    .values()
+                    .cloned()
+                    .map(|x: Vec<u8>| {
+                        let array: [u8; 33] = x.try_into().expect("slice with incorrect length");
+                        PublicKey::from_slice(&array).unwrap()
+                    })
+                    .collect();
 
                 // Generate key_agg_ctx (together with agg_pubkey). Currently there's no support for tweaks.
-                signer.generate_key_agg_ctx_serialized(pub_key_shares, None, false);
+                signer.generate_key_agg_ctx(pub_key_shares, None, false);
 
                 let agg_pubkey = signer.get_agg_pubkey().clone();
                 let msg = serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?;
@@ -183,7 +193,7 @@ impl SignContext {
 
         self.initial_signer.first_round();
 
-        let mut out_buffer = self.initial_signer.get_pubnonce_serialized().clone();
+        let mut out_buffer = self.initial_signer.get_pubnonce()?.serialize().to_vec();
         let internal_index: u8 = self.initial_signer.get_index() as u8;
 
         out_buffer.push(internal_index);
@@ -209,9 +219,9 @@ impl SignContext {
                 let pubnonces = deserialize_musig(pubnonce_hashmap.values().cloned().collect(), PUBNONCE_CHUNK_LEN)?;
 
                 // Create a vector of tuples (internal index of Signer, pubnonce)
-                let pubnonces: Vec<(usize, Vec<u8>)> = pubnonces
+                let pubnonces: Vec<(usize, PubNonce)> = pubnonces
                     .into_iter()
-                    .map(|(index, pubnonce)| (index as usize, pubnonce.to_vec()))
+                    .map(|(index, pubnonce)| (index as usize, PubNonce::from_bytes(&pubnonce).unwrap()))
                     .collect();
 
                 // Get copy of Signer object
@@ -222,7 +232,11 @@ impl SignContext {
                 if let Some(message) = &mut self.message {
                     signer.second_round(&message, pubnonces);
 
-                    let mut out_buffer = signer.get_partial_signature_serialized().clone();
+                    let mut out_buffer = signer
+                        .get_partial_signature()
+                        .serialize()
+                        .to_vec();
+
                     let internal_index = signer.get_index() as u8;
 
                     out_buffer.push(internal_index);
@@ -243,9 +257,9 @@ impl SignContext {
                 let shares = deserialize_musig(shares_hashmap.values().cloned().collect(), SCALAR_CHUNK_LEN)?;
 
                 // Create a vector of tuples (internal index of Signer, partial signature)
-                let partial_signatures: Vec<(usize, Vec<u8>)> = shares
+                let partial_signatures: Vec<(usize, PartialSignature)> = shares
                     .into_iter()
-                    .map(|(index, partial_signature)| (index as usize, partial_signature.to_vec()))
+                    .map(|(index, partial_signature)| (index as usize, PartialSignature::from_slice(&partial_signature).unwrap()))
                     .collect();
 
                 // Get copy of Signer object
@@ -389,7 +403,7 @@ mod jc {
     }
 
     pub mod command {
-        use musig2::{AggNonce, PubNonce};
+        use musig2::AggNonce;
         use secp256k1::PublicKey;
 
         use super::util::reencode_point;
@@ -461,13 +475,12 @@ mod jc {
     }
 
     pub mod response {
-        use musig2::{CompactSignature, PartialSignature, PubNonce};
+        use musig2::{PartialSignature, PubNonce};
         use secp256k1::PublicKey;
 
         use super::util::reencode_point;
         use crate::protocol::apdu::parse_response;
         use crate::protocol::Result;
-        use std::convert::TryInto;
 
         pub fn keygen(raw: &[u8]) -> Result<()> {
             parse_response(raw)?;
@@ -510,20 +523,14 @@ mod jc {
 
     #[cfg(test)]
     mod tests {
-        use std::{
-            collections::{BTreeMap, HashMap},
-            convert::TryFrom,
-            error::Error,
-        };
+        use std::error::Error;
 
         use crate::protocol::apdu::{parse_response, CommandBuilder};
 
-        use super::{super::musig2, command::{self, sign}, response};
+        use super::{super::musig2, command::{self}, response};
         use pcsc;
-        use rand::rngs::OsRng;
+        use ::musig2::{AggNonce, PartialSignature, PubNonce};
         use secp256k1::PublicKey;
-        use ::musig2::{secp::MaybeScalar, AggNonce, PartialSignature, PubNonce};
-        use serde::Serialize;
 
         use super::util::vec_removed;
 
@@ -572,15 +579,15 @@ mod jc {
             }
 
             // Get pubkeys
-            let pubkeys: Vec<Vec<u8>> = signers
+            let pubkeys: Vec<PublicKey> = signers
                 .iter()
-                .map(|s| s.pubkey_serialized())
+                .map(|s| s.pubkey())
                 .collect();
 
             // sort and assign public key
             for i in 0..n {
                 let pubkeys_wo_i = vec_removed(&pubkeys, i as usize);
-                signers[i as usize].generate_key_agg_ctx_serialized(pubkeys_wo_i, None, false);
+                signers[i as usize].generate_key_agg_ctx(pubkeys_wo_i, None, false);
             }
 
             // set agg pubkey
@@ -598,7 +605,6 @@ mod jc {
             let cmd = command::get_pubnonce();
             let resp = card.transmit(&cmd, &mut resp_buf)?;
             let pubnonce_card = response::get_pubnonce(resp)?;
-            let pubnonce_card_serialized = pubnonce_card.serialize().to_vec();
 
             // Generate and get pubnonces of other signers
             for i in 1..n {
@@ -606,18 +612,16 @@ mod jc {
             }
 
             // Combine nonces (second round)
-            let mut pubnonces: Vec<PubNonce> = Vec::new();
-            let mut pubnonces_serialized: Vec<(usize, Vec<u8>)> = Vec::new();
-            pubnonces.push(pubnonce_card);
-            pubnonces_serialized.push((signers[0].get_index(), pubnonce_card_serialized));
+            let mut pubnonces_indexed: Vec<(usize, PubNonce)> = Vec::new();
+            pubnonces_indexed.push((signers[0].get_index(), pubnonce_card));
 
             for i in 1..n {
-                pubnonces.push(signers[i as usize].get_pubnonce()?);
-                pubnonces_serialized.push((signers[i as usize].get_index(), signers[i as usize].get_pubnonce()?.serialize().to_vec()));
+                pubnonces_indexed.push((signers[i as usize].get_index(), signers[i as usize].get_pubnonce()?));
             }
 
             // Compute aggnonce (second round). Only for the card.
-            let aggnonce: AggNonce = pubnonces.iter().sum(); // Same as in the Musig2 API
+            //let aggnonce: AggNonce = pubnonces.iter().sum(); // Same as in the Musig2 API
+            let aggnonce: AggNonce = pubnonces_indexed.iter().map(|(_, pubnonce)| pubnonce).sum();
 
             // Load aggnonce onto the card
             let cmd = command::set_agg_nonces(&aggnonce);
@@ -626,7 +630,7 @@ mod jc {
 
             // Do second round on other signers
             for i in 1..n {
-                let mut pubnonces_filtered = pubnonces_serialized.clone();
+                let mut pubnonces_filtered = pubnonces_indexed.clone();
                 pubnonces_filtered.remove(i as usize);
                 signers[i as usize].second_round(&message.as_bytes().to_vec(), pubnonces_filtered);
             }
@@ -645,9 +649,9 @@ mod jc {
                 partial_sigs.push(signers[i as usize].get_partial_signature());
             }
 
-            let partial_sigs_with_index: Vec<(usize, Vec<u8>)> = signers
+            let partial_sigs_with_index: Vec<(usize, PartialSignature)> = signers
                 .iter_mut()
-                .map(|signer| (signer.get_index(), signer.get_partial_signature_serialized()))
+                .map(|signer| (signer.get_index(), signer.get_partial_signature()))
                 .collect();
 
 
@@ -655,6 +659,7 @@ mod jc {
             for i in 0..n {
 
                 // TODO: Wont work for the card signer object
+                // TODO: Like aggnnonce
                 signers[i as usize].receive_partial_signatures(
                     vec_removed(&partial_sigs_with_index, i as usize)
                 );

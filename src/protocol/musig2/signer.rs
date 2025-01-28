@@ -24,7 +24,7 @@ pub struct Signer {
     // Secret nonce
     sec_nonce: Option<[u8; 32]>, 
     // Pub nonces
-    pub_nonces: Option<Vec<(usize, Vec<u8>)>>, 
+    pub_nonces: Option<Vec<(usize, PubNonce)>>, 
     // Partial signatures
     partial_signatures: Option<Vec<(usize, PartialSignature)>>, 
     // Message to be signed
@@ -69,10 +69,6 @@ impl Signer {
         }
     }
 
-    pub fn pubkey_serialized(&self) -> Vec<u8> {
-        return self.pubkey().serialize().to_vec();
-    }
-
     pub fn get_index(&self) -> usize {
 
         match self.index {
@@ -83,45 +79,12 @@ impl Signer {
         return self.index.unwrap();
     }
 
-    pub fn get_partial_signature_serialized(&mut self) -> Vec<u8> {
-        return self.get_partial_signature().serialize().to_vec();
-    }
-
-    pub fn get_pubnonce_serialized(&mut self) -> Vec<u8> {
-        match self.get_pubnonce() {
-            Ok(pubnonce) => {
-                return pubnonce.serialize().to_vec();
-            }
-            Err(_) => {
-                panic!("Error getting pubnonce");
-            }
-        }
-    }
-
-    pub fn generate_key_agg_ctx_serialized(&mut self, pubkeys_ser: Vec<Vec<u8>>, tweak: Option<[u8;32]>, xonly: bool) {
-
-        let mut pubkeys: Vec<PublicKey> = Vec::new();
-        for pubkey in pubkeys_ser {
-            pubkeys.push(PublicKey::from_slice(&pubkey).unwrap());
-        }
-
-        self.generate_key_agg_ctx(pubkeys, tweak, xonly);
-    }
-
-    pub fn receive_partial_signatures(&mut self, partial_signatures: Vec<(usize, Vec<u8>)>) {
-        
-        let mut partial_signatures_self: Vec<(usize, PartialSignature)> = Vec::new();
-
-        for (signer_index, partial_signature) in partial_signatures.clone() {
-            let partial_signature = PartialSignature::from_slice(&partial_signature).unwrap();
-            partial_signatures_self.push((signer_index, partial_signature));
-        }
-
-        self.partial_signatures = Some(partial_signatures_self);
+    pub fn receive_partial_signatures(&mut self, partial_signatures: Vec<(usize, PartialSignature)>) {
+        self.partial_signatures = Some(partial_signatures);
     }
 
     // Share public key
-    fn pubkey(&self) -> PublicKey {
+    pub fn pubkey(&self) -> PublicKey {
         return self.pubkey;
     }
 
@@ -134,7 +97,7 @@ impl Signer {
         }
     }
 
-    fn generate_key_agg_ctx(&mut self, all_pubkeys: Vec<PublicKey>, tweak: Option<[u8;32]>, xonly: bool) {
+    pub fn generate_key_agg_ctx(&mut self, all_pubkeys: Vec<PublicKey>, tweak: Option<[u8;32]>, xonly: bool) {
 
         // Get public key shares sorted in lexigraphical order (BIP0327)
         let mut pubkeys: Vec<PublicKey> = all_pubkeys.clone();
@@ -245,11 +208,6 @@ impl Signer {
             }
     }
 
-    fn add_pubnonce_serialized(&mut self, nonce_index: &usize, pubnonce: Vec<u8>, first_round: &mut FirstRound) {
-        let pubnonce = PubNonce::from_bytes(&pubnonce).unwrap();
-        self.add_pubnonce(&nonce_index, pubnonce, first_round);
-    }
-
     fn second_round_internal(&mut self) -> Result<SecondRound<Vec<u8>>, String> {
 
         let pubnonces = match &self.pub_nonces {
@@ -265,14 +223,14 @@ impl Signer {
         let mut first_round = self.first_round_internal().unwrap();
     
         for (index, pubnonce) in pubnonces.iter() {
-            self.add_pubnonce_serialized(&index, pubnonce.clone(), &mut first_round);
+            self.add_pubnonce(&index, pubnonce.clone(), &mut first_round);
         }
     
         let second_round: SecondRound<Vec<u8>> = first_round.finalize::<Vec<u8>>(self.seckey(), message).unwrap();
         Ok(second_round)
     }
 
-    pub fn second_round(&mut self, message: &Vec<u8>, pubnonces: Vec<(usize, Vec<u8>)>) {
+    pub fn second_round(&mut self, message: &Vec<u8>, pubnonces: Vec<(usize, PubNonce)>) {
         self.message = Some(message.clone());
         self.pub_nonces = Some(pubnonces.clone());
     }
