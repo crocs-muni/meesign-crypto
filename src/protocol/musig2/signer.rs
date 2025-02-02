@@ -1,7 +1,10 @@
 use core::panic;
+use std::convert::TryInto;
 
-use musig2::{CompactSignature, FirstRound, KeyAggContext, PartialSignature, PubNonce, SecondRound};
-use musig2::secp::{MaybeScalar, Scalar};
+use musig2::errors::VerifyError;
+use musig2::{AdaptorSignature, AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecondRound};
+use musig2::secp::{MaybeScalar, Scalar, MaybePoint};
+use musig2::adaptor::aggregate_partial_signatures;
 use rand::RngCore;
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -10,8 +13,11 @@ use rand::rngs::OsRng;
 
 // Musig2 Signer Util
 
+const DUMMY_SKEY: [u8; 32] = [0; 32];
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Signer {
+    with_card: bool,
     // Public key share
     pubkey: PublicKey,
     // Private key share
@@ -40,6 +46,7 @@ impl Signer {
         let keypair = Keypair::from_secret_key(&secp, &pair.0);
 
         Self {
+            with_card: false,
             pubkey: keypair.public_key(),
             seckey: Some(keypair.secret_key()),
             key_agg_ctx: None,
@@ -57,6 +64,7 @@ impl Signer {
         let pubkey = pubkey;
 
         Self {
+            with_card: true,
             pubkey: pubkey,
             seckey: None,
             key_agg_ctx: None,
@@ -77,10 +85,6 @@ impl Signer {
         }
 
         return self.index.unwrap();
-    }
-
-    pub fn receive_partial_signatures(&mut self, partial_signatures: Vec<(usize, PartialSignature)>) {
-        self.partial_signatures = Some(partial_signatures);
     }
 
     // Share public key
@@ -161,7 +165,8 @@ impl Signer {
 
             Some(sec_nonce) => {
                  // Secret key share
-                let seckey = self.seckey();
+                let seckey = if self.with_card {SecretKey::from_slice(&DUMMY_SKEY).unwrap()} 
+                                            else {self.seckey()};
 
                 // Create first round for this signer
                 let first_round = musig2::FirstRound::new(
@@ -208,6 +213,22 @@ impl Signer {
             }
     }
 
+    pub fn get_aggnonce(&self) -> Result<AggNonce, String> {
+
+        match &self.pub_nonces {
+            None => return Err("Pubnonces not initialized".into()),
+            Some(pub_nonces) => {
+                let agg_nonce = pub_nonces.iter().map(|(_, pubnonce)| pubnonce).sum();
+                return Ok(agg_nonce);
+            }
+        };
+    }
+
+    pub fn second_round(&mut self, message: &Vec<u8>, pubnonces: Vec<(usize, PubNonce)>) {
+        self.message = Some(message.clone());
+        self.pub_nonces = Some(pubnonces.clone());
+    }
+
     fn second_round_internal(&mut self) -> Result<SecondRound<Vec<u8>>, String> {
 
         let pubnonces = match &self.pub_nonces {
@@ -225,14 +246,17 @@ impl Signer {
         for (index, pubnonce) in pubnonces.iter() {
             self.add_pubnonce(&index, pubnonce.clone(), &mut first_round);
         }
-    
-        let second_round: SecondRound<Vec<u8>> = first_round.finalize::<Vec<u8>>(self.seckey(), message).unwrap();
-        Ok(second_round)
-    }
 
-    pub fn second_round(&mut self, message: &Vec<u8>, pubnonces: Vec<(usize, PubNonce)>) {
-        self.message = Some(message.clone());
-        self.pub_nonces = Some(pubnonces.clone());
+        let second_round: SecondRound<Vec<u8>>;   
+        
+        if self.with_card {
+            let dummy_seckey = SecretKey::from_slice(&DUMMY_SKEY).unwrap();
+            second_round = first_round.finalize::<Vec<u8>>(dummy_seckey, message).unwrap();
+        } else {
+            second_round = first_round.finalize::<Vec<u8>>(self.seckey(), message).unwrap();
+        }
+
+        Ok(second_round)
     }
 
     pub fn get_partial_signature(&mut self) -> PartialSignature {
@@ -245,35 +269,89 @@ impl Signer {
         return second_round.our_signature();
     }
 
-    pub fn get_agg_signature(&mut self) -> Result<CompactSignature, String> {
+    pub fn receive_partial_signatures(&mut self, partial_signatures: Vec<(usize, PartialSignature)>) {
+        self.partial_signatures = Some(partial_signatures);
+    }
 
-        let mut sr = match self.second_round_internal() {
-            Ok(sr) => sr,
-            Err(_) => return Err("Second round not initialized".into()),
-        };
+    pub fn get_agg_signature(&mut self) -> Result<CompactSignature, String> {
 
         let partial_signatures = match &self.partial_signatures {
             Some(partial_signatures) => partial_signatures.clone(),
             None => return Err("Partial signatures not initialized".into()),
         };
 
-        for (signer_index, partial_signature) in partial_signatures {
-            match sr.receive_signature(signer_index, partial_signature) {
-                Ok(_) => {}
-                Err(e) => {
-                    return Err(format!("Error receiving signature: {:?}", e));
-                }
-            }
-        }
-
-        let agg_signature = sr.finalize().unwrap();
+        let agg_signature = if self.with_card {
+            self.get_agg_signature_with_card(partial_signatures)
+        } else {
+            self.get_agg_signature_no_card(partial_signatures)
+        };
 
         // Erase nonces for security reasons
         self.sec_nonce = None;
         self.pub_nonces = None;
         self.partial_signatures = None;
 
-        return Ok(agg_signature);
+        return agg_signature;
+    }
+
+    fn get_agg_signature_no_card (
+        &mut self, 
+        partial_signatures: Vec<(usize, MaybeScalar)>
+    ) -> Result<CompactSignature, String> {
+
+        let mut sr = match self.second_round_internal() {
+            Ok(sr) => sr,
+            Err(_) => return Err("Second round not initialized".into()),
+        };
+
+        for (signer_index, partial_signature) in partial_signatures {
+            match sr.receive_signature(signer_index, partial_signature) {
+                Ok(_) => {}
+                Err(_) => {
+                    return Err("Error receiving partial signature".into());
+                }
+            }
+        }
+
+        return Ok(sr.finalize().unwrap());
+    }
+
+
+    // Insipired by [`musig2::SecondRound::finalize`] method
+    fn get_agg_signature_with_card<T> (
+        &self,
+        partial_signatures: Vec<(usize, MaybeScalar)>
+    ) -> Result<T, String>
+    where
+        T: From<LiftedSignature>, 
+    {
+
+        //TODO: Add partial signature correctness check
+
+        let mut sorted_partial_signatures = partial_signatures.clone();
+        sorted_partial_signatures.sort_by(|a, b| a.0.cmp(&b.0));
+        let sorted_partial_signatures: Vec<PartialSignature> = sorted_partial_signatures
+            .iter()
+            .map(|x| x.1)
+            .collect();
+
+        let aggnonce = self.get_aggnonce()?;
+        let message = self.message.as_ref().unwrap();
+
+        let sig = aggregate_partial_signatures(
+            &self.key_agg_ctx.clone().unwrap(),
+            &aggnonce,
+            MaybePoint::Infinity,
+            sorted_partial_signatures,
+            &message
+        );
+
+        let agg_sig = sig
+            .map_err(|e| e.to_string())?
+            .adapt(MaybeScalar::Zero)
+            .expect("finalizing with empty adaptor should never result in an adaptor failure");
+
+        return Ok(T::from(agg_sig));
     }
 
     fn sort_pubkeys(&mut self, pubkeys: Vec<PublicKey>) -> Vec<PublicKey> {

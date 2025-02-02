@@ -657,9 +657,6 @@ mod jc {
 
             // Combine partial signatures (all signers)
             for i in 0..n {
-
-                // TODO: Wont work for the card signer object
-                // TODO: Like aggnnonce
                 signers[i as usize].receive_partial_signatures(
                     vec_removed(&partial_sigs_with_index, i as usize)
                 );
