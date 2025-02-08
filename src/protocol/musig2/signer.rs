@@ -4,7 +4,7 @@ use std::convert::TryInto;
 use musig2::errors::VerifyError;
 use musig2::{AdaptorSignature, AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecondRound};
 use musig2::secp::{MaybeScalar, Scalar, MaybePoint};
-use musig2::adaptor::aggregate_partial_signatures;
+use musig2::adaptor::{aggregate_partial_signatures, verify_partial};
 use rand::RngCore;
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
@@ -29,8 +29,12 @@ pub struct Signer {
     agg_signature: Option<CompactSignature>, 
     // Secret nonce
     sec_nonce: Option<[u8; 32]>, 
-    // Pub nonces
-    pub_nonces: Option<Vec<(usize, PubNonce)>>, 
+    // Public nonce of the signer (with card only)
+    pubnonce: Option<PubNonce>,
+    // Pub nonces of other signers
+    pub_nonces: Option<Vec<(usize, PubNonce)>>,
+    // Partial signature of the signer (with card only)
+    partial_signature: Option<PartialSignature>,
     // Partial signatures
     partial_signatures: Option<Vec<(usize, PartialSignature)>>, 
     // Message to be signed
@@ -53,8 +57,10 @@ impl Signer {
             index: None,
             agg_signature: None,
             sec_nonce: None,
+            pubnonce: None,
             pub_nonces: None,
             message: None,
+            partial_signature: None,
             partial_signatures: None,
         }
     }
@@ -71,8 +77,10 @@ impl Signer {
             index: None,
             agg_signature: None,
             sec_nonce: None,
+            pubnonce: None,
             pub_nonces: None,
             message: None,
+            partial_signature: None,
             partial_signatures: None,
         }
     }
@@ -143,6 +151,24 @@ impl Signer {
         }
     }
 
+    pub fn set_partial_signature(&mut self, partial_signature: PartialSignature) -> Result<(), String> {
+        if self.with_card {
+            self.partial_signature = Some(partial_signature);
+            Ok(())
+        } else {
+            Err("Only card based signers can set their partial signature.".into())
+        }
+    }
+
+    pub fn set_pubnonce(&mut self, pubnonce: PubNonce) -> Result<(), String> {
+        if self.with_card {
+            self.pubnonce = Some(pubnonce);
+            Ok(())
+        } else {
+            Err("Only card based signers can set their pubnonce.".into())
+        }
+    }
+
     pub fn first_round(&mut self) {
 
         // Create an instance of OsRng
@@ -184,8 +210,19 @@ impl Signer {
         }
     }
 
-    pub fn get_pubnonce(&mut self) -> Result<PubNonce, String> {
-        
+    pub fn get_pubnonce(&self) -> Result<PubNonce, String> {
+
+        if self.with_card {
+            match &self.pubnonce {
+                Some(pubnonce) => {
+                    return Ok(pubnonce.clone());
+                }
+                None => {
+                    return Err("No pubnonce set for card signer".into());
+                }
+            }
+        }
+
         let first_round = self.first_round_internal();
 
         match first_round {
@@ -218,7 +255,9 @@ impl Signer {
         match &self.pub_nonces {
             None => return Err("Pubnonces not initialized".into()),
             Some(pub_nonces) => {
-                let agg_nonce = pub_nonces.iter().map(|(_, pubnonce)| pubnonce).sum();
+                let mut pubnonces_all = pub_nonces.clone();
+                pubnonces_all.push((self.get_index(), self.get_pubnonce()?));
+                let agg_nonce = pubnonces_all.iter().map(|(_, pubnonce)| pubnonce).sum();
                 return Ok(agg_nonce);
             }
         };
@@ -250,8 +289,7 @@ impl Signer {
         let second_round: SecondRound<Vec<u8>>;   
         
         if self.with_card {
-            let dummy_seckey = SecretKey::from_slice(&DUMMY_SKEY).unwrap();
-            second_round = first_round.finalize::<Vec<u8>>(dummy_seckey, message).unwrap();
+            return Err("Card signers cant generate second round.".into());
         } else {
             second_round = first_round.finalize::<Vec<u8>>(self.seckey(), message).unwrap();
         }
@@ -260,6 +298,17 @@ impl Signer {
     }
 
     pub fn get_partial_signature(&mut self) -> PartialSignature {
+
+        if self.with_card {
+            match &self.partial_signature {
+                Some(partial_signature) => {
+                    return partial_signature.clone();
+                }
+                None => {
+                    panic!("No pubnonce set for card signer");
+                }
+            }
+        }
 
         let second_round = match self.second_round_internal() {
             Ok(sr) => sr,
@@ -319,7 +368,7 @@ impl Signer {
 
     // Insipired by [`musig2::SecondRound::finalize`] method
     fn get_agg_signature_with_card<T> (
-        &self,
+        &mut self,
         partial_signatures: Vec<(usize, MaybeScalar)>
     ) -> Result<T, String>
     where
@@ -327,8 +376,19 @@ impl Signer {
     {
 
         //TODO: Add partial signature correctness check
+        // for partial_signature in partial_signatures {
+        //     verify_partial(
+        //        &self.key_agg_ctx.clone().unwrap(),
+        //         partial_signature.1,
+        //         &self.get_aggnonce()?, 
+        //         MaybePoint::Infinity,
+        //         &self.key_agg_ctx,
+        //         individual_pubnonce, 
+        //         message);
+        // }
 
         let mut sorted_partial_signatures = partial_signatures.clone();
+        sorted_partial_signatures.push((self.get_index(), self.get_partial_signature()));
         sorted_partial_signatures.sort_by(|a, b| a.0.cmp(&b.0));
         let sorted_partial_signatures: Vec<PartialSignature> = sorted_partial_signatures
             .iter()
