@@ -424,6 +424,9 @@ mod jc {
         const SCALAR_LEN: usize = 32;
         const POINT_LEN : usize = 33;
 
+        const STATE_TRUE: u8 = 0xF4;
+        const STATE_FALSE: u8 = 0x2C;
+
         const CLA: u8 = 0xA6;
 
         const INS_RESET: u8 = 0x65;
@@ -439,8 +442,8 @@ mod jc {
         const INS_SET_AGG_PUBKEY: u8 = 0x76;
         const INS_SET_AGG_NONCES: u8 = 0x9A;
 
-        pub fn keygen_with_sk(sk: SecretKey) -> Vec<u8> {
-            let testing_value_switch: [u8; 5] = [0x01, 0x00, 0x00, 0x00, 0x00];
+        pub fn keygen_with_sk(sk: &SecretKey) -> Vec<u8> {
+            let testing_value_switch: [u8; 5] = [STATE_TRUE, STATE_FALSE, STATE_FALSE, STATE_FALSE, STATE_FALSE];
 
             CommandBuilder::new(CLA, INS_GENERATE_KEYS)
                 .extend(&testing_value_switch)
@@ -528,7 +531,7 @@ mod jc {
 
         pub fn get_plain_pubkey(raw: &[u8]) -> Result<PublicKey> {
             let data = parse_response(raw)?;
-            let pubkey = PublicKey::from_slice(&reencode_point(data, false)?)?;
+            let pubkey = PublicKey::from_slice(&reencode_point(data, true)?)?;
             Ok(pubkey)
         }
 
@@ -571,7 +574,7 @@ mod jc {
         use super::{super::musig2, command::{self}, response};
         use pcsc::{self, Card};
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
-        use secp256k1::{PublicKey, Secp256k1};
+        use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 
         use super::util::{vec_removed, get_random_keypair};
 
@@ -592,6 +595,11 @@ mod jc {
             let resp = card.transmit(&select, &mut resp_buf)?;
             parse_response(resp)?;
 
+            // Reset card to default state
+            let cmd = command::reset();
+            let resp = card.transmit(&cmd, &mut resp_buf)?;
+            response::reset(resp)?;
+
             Ok((card, resp_buf))
         }
 
@@ -606,10 +614,17 @@ mod jc {
             let card; let mut resp_buf;
             (card, resp_buf) = prepare_card()?;
 
-            let our_sk = get_random_keypair().secret_key();
+            let seckey_bytes: &[u8;32] = &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ];
+
+            let our_sk = SecretKey::from_byte_array(seckey_bytes)?;
+            let our_pair = Keypair::from_secret_key(&Secp256k1::new(), &our_sk);
+            let our_pk = our_pair.public_key();
 
             // Generate PK on card
-            let cmd = command::keygen_with_sk(our_sk);
+            let cmd = command::keygen_with_sk(&our_sk);
             let resp = card.transmit(&cmd, &mut resp_buf)?;
             response::keygen(resp)?;
 
@@ -618,22 +633,12 @@ mod jc {
             let card_pubkey = response::get_plain_pubkey(resp)?;
 
             // Generate PK on device
-            let signer = musig2::Signer::new_from_card(our_sk.public_key(&Secp256k1::new()));
+            let signer = musig2::Signer::new_from_card(our_pk);
             let device_pubkey = signer.pubkey();
 
             assert_eq!(card_pubkey, device_pubkey);
 
             Ok(())
-        }
-
-        #[test]
-        fn aggnonce_test() {
-
-        }
-
-        #[test]
-        fn sign_test() {
-
         }
 
         #[test]
@@ -652,11 +657,6 @@ mod jc {
             let message = "Testing mssg123";
 
             let mut signers: [musig2::Signer; 3] = [musig2::Signer::new(), musig2::Signer::new(), musig2::Signer::new()];
-
-            // Reset card to default state
-            let cmd = command::reset();
-            let resp = card.transmit(&cmd, &mut resp_buf)?;
-            response::reset(resp)?;
 
             // keygen
             let cmd = command::keygen();
