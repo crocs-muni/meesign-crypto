@@ -27,7 +27,8 @@ pub(crate) struct KeygenContext {
 #[derive(Serialize, Deserialize)]
 enum KeygenRound {
     R0,
-    //R0AwaitKeyFromCard(Setup, Signer), // Get public key from card
+    R0GetPubkey(Setup), // Get pubkey from card
+    R0AwaitGetPubkey(Setup), // Get pubkey from card
     R1(Setup, Signer), // Setup and skey share of the user
     Done(Setup, Signer),
 }
@@ -58,18 +59,48 @@ impl KeygenContext {
         };
 
         // Key share pair generated
-        let signer: Signer = Signer::new();
+        if self.with_card {
+            let command = jc::command::keygen();
+            self.round = KeygenRound::R0GetPubkey(setup);
+            Ok((command, Recipient::Card))
+        } else {
+            let signer: Signer = Signer::new();
 
-        let public_key_share = signer.pubkey().serialize().to_vec();
+            let public_key_share = signer.pubkey().serialize().to_vec();
 
-        let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
-        self.round = KeygenRound::R1(setup, signer);
-        Ok((msg, Recipient::Server))
+            let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
+            self.round = KeygenRound::R1(setup, signer);
+            Ok((msg, Recipient::Server))
+        }
+
     }
 
     fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         let (c, data, rec) = match &mut self.round {
             KeygenRound::R0 => return Err("protocol not initialized".into()),
+            KeygenRound::R0GetPubkey(setup) => {
+                jc::response::keygen(data)?;
+                let command = jc::command::get_plain_pubkey();
+                (
+                    KeygenRound::R0AwaitGetPubkey(*setup),
+                    command,
+                    Recipient::Card,
+                )
+            }
+            KeygenRound::R0AwaitGetPubkey(setup) => {
+                let pubkey = jc::response::get_plain_pubkey(data)?;
+                let signer = Signer::new_from_card(pubkey);
+
+                let public_key_share = pubkey.serialize().to_vec();
+
+                let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
+                (
+                    KeygenRound::R1(*setup, signer),
+                    msg,
+                    Recipient::Server
+                )
+
+            }
             KeygenRound::R1(setup, signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
                 let pub_keys_hashmap = deserialize_map(&data)?;
@@ -603,13 +634,9 @@ mod jc {
             Ok((card, resp_buf))
         }
 
+        // Card must be in DEBUG mode
         #[test]
         fn keygen_test() -> Result<(), Box<dyn Error>> {
-            let pk_dummy = [
-                get_random_keypair().public_key(),
-                get_random_keypair().public_key()
-            ];
-
             // connect to card
             let card; let mut resp_buf;
             (card, resp_buf) = prepare_card()?;
