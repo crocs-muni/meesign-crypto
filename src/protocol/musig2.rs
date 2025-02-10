@@ -16,6 +16,7 @@ struct Setup {
     threshold: u16,
     parties: u16,
     index: u16,
+    with_card: bool
 }
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +57,7 @@ impl KeygenContext {
             threshold: msg.threshold as u16,
             parties: msg.parties as u16,
             index: msg.index as u16,
+            with_card: self.with_card
         };
 
         // Key share pair generated
@@ -202,7 +204,11 @@ const SCALAR_CHUNK_LEN: usize = 33; //(32+1)
 #[derive(Serialize, Deserialize)]
 enum SignRound {
     R0,
-    R1(Signer),
+    R0GenerateNonce(Signer),
+    R0AwaitNonce(Signer),
+    R1(Signer), // Also loads aggnonce onto the card
+    R1PartiallySign(Signer),
+    R1AwaitPartialSignature(Signer),
     R2(Signer),
     Done(CompactSignature),
 }
@@ -221,6 +227,13 @@ impl SignContext {
 
         self.indices = Some(msg.indices.iter().map(|i| *i as u16).collect());
         self.message = Some(msg.data);
+
+        if self.setup.with_card {
+            let command = jc::command::noncegen();
+            self.round = SignRound::R0GenerateNonce(self.initial_signer.clone());
+
+            return Ok((command, Recipient::Card));
+        }
 
         self.initial_signer.first_round();
 
@@ -241,6 +254,28 @@ impl SignContext {
     fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
         match &self.round {
             SignRound::R0 => Err("protocol not initialized".into()),
+            SignRound::R0GenerateNonce(signer) => {
+                jc::response::noncegen(data)?;
+                let command: Vec<u8> = jc::command::get_pubnonce();
+                self.round = SignRound::R0AwaitNonce(signer.clone());
+                Ok((command, Recipient::Card))
+            }
+            SignRound::R0AwaitNonce(signer) => {
+                let pubnonce = jc::response::get_pubnonce(data)?;
+
+                let mut signer = signer.clone();
+                signer.set_pubnonce(pubnonce)?;
+
+                //signer.set_pubnonce(pubnonce);
+                let mut out_buffer = signer.get_pubnonce()?.serialize().to_vec();
+                let internal_index: u8 = signer.get_index() as u8;
+
+                out_buffer.push(internal_index);
+                let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+
+                self.round = SignRound::R1(signer);
+                Ok((msg, Recipient::Server))
+            }
             SignRound::R1(signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
                 let pubnonce_hashmap: HashMap<u32, Vec<u8>> = deserialize_map(&data)?;
@@ -263,6 +298,14 @@ impl SignContext {
                 if let Some(message) = &mut self.message {
                     signer.second_round(&message, pubnonces);
 
+                    if self.setup.with_card {
+                        let aggnonce = signer.get_aggnonce()?;
+                        let command = jc::command::set_agg_nonces(&aggnonce);
+                        self.round = SignRound::R1PartiallySign(signer);
+
+                        return Ok((command, Recipient::Card));
+                    }
+
                     let mut out_buffer = signer
                         .get_partial_signature()
                         .serialize()
@@ -281,6 +324,32 @@ impl SignContext {
                 } else {
                     Err("message to sign not initialized".into())
                 }
+            }
+            SignRound::R1PartiallySign(signer) => {
+                jc::response::set_agg_nonces(data)?;
+                let command: Vec<u8> = jc::command::sign(self.message.as_ref().unwrap().as_slice());
+                self.round = SignRound::R1AwaitPartialSignature(signer.clone());
+                Ok((command, Recipient::Card))
+            }
+            SignRound::R1AwaitPartialSignature(signer) => {
+                let partial_signature = jc::response::sign(data)?;
+                let mut signer = signer.clone();
+                signer.set_partial_signature(partial_signature)?;
+
+                let mut out_buffer = partial_signature
+                        .serialize()
+                        .to_vec();
+
+                let internal_index = signer.get_index() as u8;
+
+                out_buffer.push(internal_index);
+
+                // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
+                let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+
+                self.round = SignRound::R2(signer.clone());
+                
+                Ok((msg, Recipient::Server))
             }
             SignRound::R2(signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
