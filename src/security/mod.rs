@@ -83,13 +83,13 @@ fn finalize_round(
     }
 
     let data = ClientMessage::decode(data.as_ref()).unwrap();
-    let data = secure_message(data, private_bundle, public_bundles)?;
-    let state = if data.broadcast.is_some() {
+    let state = if let Some(msg) = &data.broadcast {
         assert_eq!(data.unicasts.len(), 0);
-        State::BroadcastExchange
+        State::BroadcastExchange(msg.clone())
     } else {
         State::Running
     };
+    let data = secure_message(data, private_bundle, public_bundles)?;
     let data = data.encode_to_vec();
 
     Ok((state, data, recipient))
@@ -107,9 +107,9 @@ pub enum State {
     /// Handles the response of a smart card
     CardResponse,
     /// Reached after a broadcast is sent. Implements echo-broadcast round 2. Does not compute a protocol round
-    BroadcastExchange,
+    BroadcastExchange(Vec<u8>),
     /// Finished echo-broadcast and continues with another protocol round
-    BroadcastCheck(HashMap<u32, Vec<u8>>),
+    BroadcastCheck(HashMap<u32, Vec<u8>>, Vec<u8>),
 }
 
 /// A wrapper around the raw threshold protocols providing necessary security guarantees,
@@ -224,9 +224,9 @@ impl SecureLayer {
 
                 finalize_round(data, recipient, &private_bundle, &public_bundles)?
             }
-            State::BroadcastExchange => {
+            State::BroadcastExchange(our_original_msg) => {
                 let data_dec = ServerMessage::decode(data)?;
-                let mut original_msgs = HashMap::new();
+                let mut original_msgs = HashMap::with_capacity(data_dec.broadcasts.len());
                 for (sender, message) in &data_dec.broadcasts {
                     let key = &public_bundles[sender].broadcast_sign;
                     let key = ecdsa::VerifyingKey::from_public_key_der(key)?;
@@ -252,12 +252,12 @@ impl SecureLayer {
                 .encode_to_vec();
 
                 (
-                    State::BroadcastCheck(original_msgs),
+                    State::BroadcastCheck(original_msgs, our_original_msg.clone()),
                     data,
                     Recipient::Server,
                 )
             }
-            State::BroadcastCheck(original_msgs) => {
+            State::BroadcastCheck(original_msgs, our_original_msg) => {
                 let data = ServerMessage::decode(data)?;
                 assert!(!data.broadcasts.contains_key(&self.share_indices[share_idx]));
                 assert_eq!(data.broadcasts.len(), self.participant_indices.len() - 1);
@@ -281,7 +281,13 @@ impl SecureLayer {
                     for (sender, relayed_msg) in &relayed_msgs.broadcasts {
                         let relayed_msg = verify_message(relayed_msg, &sign_pub_keys[sender])?;
 
-                        if sender == relayer || *sender == self.share_indices[share_idx] {
+                        if *sender == self.share_indices[share_idx] {
+                            if our_original_msg != &relayed_msg {
+                                return Err("broadcast compromised".into());
+                            }
+                            continue;
+                        }
+                        if sender == relayer {
                             continue;
                         }
                         if !original_msgs
