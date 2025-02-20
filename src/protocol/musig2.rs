@@ -484,9 +484,6 @@ mod jc {
             AffinePoint, EncodedPoint,
         };
 
-        use rand::rngs::OsRng;
-        use secp256k1::{Keypair, Secp256k1};
-
         pub fn reencode_point(ser: &[u8], compress: bool) -> Result<Box<[u8]>> {
             let encoded = EncodedPoint::from_bytes(ser)?;
             match Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&encoded)) {
@@ -502,14 +499,6 @@ mod jc {
                 .filter(|&(i, _)| i != index)
                 .map(|(_, item)| item.clone())
                 .collect()
-        }
-
-        pub fn get_random_keypair() -> Keypair {
-            let secp = Secp256k1::new();
-            let mut rng = OsRng::default();
-            let pair = secp.generate_keypair(&mut rng); 
-
-            return Keypair::from_secret_key(&secp, &pair.0);
         }
 
     }
@@ -676,9 +665,9 @@ mod jc {
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
         use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 
-        use super::util::{vec_removed, get_random_keypair};
+        use super::util::vec_removed;
 
-        pub fn prepare_card() -> Result<(Card, [u8; 264]), Box<dyn Error>> {
+        fn prepare_card() -> Result<(Card, [u8; 264]), Box<dyn Error>> {
             // connect to card
             let ctx = pcsc::Context::establish(pcsc::Scope::User)?;
             let mut readers_buf = [0; 2048];
@@ -853,7 +842,7 @@ mod jc {
             }
 
             //Check signature by all signers
-            for i in 1..n {
+            for i in 0..n {
                 let signature = signers[i as usize].get_agg_signature()?;
                 assert!(::musig2::verify_single(signers[i as usize].get_agg_pubkey(), signature, message.as_bytes()).is_ok());
             }
