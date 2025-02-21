@@ -11,6 +11,7 @@ use ::musig2::{CompactSignature, PartialSignature, PubNonce};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Setup {
     threshold: u16,
@@ -31,6 +32,7 @@ enum KeygenRound {
     R0GetPubkey(Setup), // Get pubkey from card
     R0AwaitGetPubkey(Setup), // Get pubkey from card
     R1(Setup, Signer), // Setup and skey share of the user
+    R1AwaitAggkeyLoad(Setup, Signer), // Load aggregate key onto the card
     Done(Setup, Signer),
 }
 
@@ -119,14 +121,45 @@ impl KeygenContext {
 
                 // Generate key_agg_ctx (together with agg_pubkey). Currently there's no support for tweaks.
                 signer.generate_key_agg_ctx(pub_key_shares, None, false);
-
                 let agg_pubkey = signer.get_agg_pubkey().clone();
-                let msg = serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?;
+
+                if self.with_card {
+                    
+                    let tacc: u8 = 0;
+                    let gacc: u8 = 1;
+                    let coef_a = signer.get_coef_a().serialize();
+
+                    let command = jc::command::set_aggpubkey(
+               agg_pubkey,
+                        gacc,
+                        tacc,
+                        coef_a
+                    );
+
+                    (
+                        KeygenRound::R1AwaitAggkeyLoad(*setup, signer.clone()),
+                        command,
+                        Recipient::Card,
+                    )
+
+                } else {
+                    (
+                        KeygenRound::Done(*setup, signer.clone()),
+                        serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?,
+                        Recipient::Server,
+                    )
+                }
+
+            }
+            KeygenRound::R1AwaitAggkeyLoad(setup, signer) => {
+
+                jc::response::set_aggpubkey(data)?;
+                let agg_pubkey = signer.get_agg_pubkey();
 
                 (
-                    KeygenRound::Done(*setup, signer.clone()),
-                    msg,
-                    Recipient::Server,
+                        KeygenRound::Done(*setup, signer.clone()),
+                        serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?,
+                        Recipient::Server,
                 )
             }
             KeygenRound::Done(_, _) => return Err("protocol already finished".into()),
@@ -245,7 +278,6 @@ impl SignContext {
         // Serialize the public nonce and the internal index of the signer. Format: &[u8] + u8
         let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?; // TODO: Check if this is correct usage of serialize_bcast
 
-        // TODO: Can I somehow just pass a reference instead of cloning? (Due to Signer having a secret share inside)
         self.round = SignRound::R1(self.initial_signer.clone());
 
         Ok((msg, Recipient::Server))
@@ -291,7 +323,6 @@ impl SignContext {
                     .collect();
 
                 // Get copy of Signer object
-                // TODO: Another example of the unnecessary cloning?
                 let mut signer: Signer = signer.clone();
 
                 // Establish second round
@@ -504,7 +535,7 @@ mod jc {
     }
 
     pub mod command {
-        use musig2::{secp::MaybeScalar, AggNonce};
+        use musig2::AggNonce;
         use secp256k1::{PublicKey, SecretKey};
 
         use super::util::reencode_point;

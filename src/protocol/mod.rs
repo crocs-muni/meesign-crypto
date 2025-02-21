@@ -57,7 +57,7 @@ mod tests {
 
             // initialize
             let mut ctxs: HashMap<u32, Self> = (0..parties)
-                .map(|i| (i as u32 + Self::INDEX_OFFSET, Self::new()))
+                .map(|i| (i as u32 + Self::INDEX_OFFSET, Self::new() ))
                 .collect();
 
             let mut messages: HashMap<u32, _> = ctxs

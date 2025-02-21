@@ -1,10 +1,8 @@
 use core::panic;
-use std::convert::TryInto;
 
-use musig2::errors::VerifyError;
-use musig2::{AdaptorSignature, AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecondRound};
+use musig2::{AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecondRound};
 use musig2::secp::{MaybeScalar, Scalar, MaybePoint};
-use musig2::adaptor::{aggregate_partial_signatures, verify_partial};
+use musig2::adaptor::aggregate_partial_signatures;
 use rand::RngCore;
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
