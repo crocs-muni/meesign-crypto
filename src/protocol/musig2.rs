@@ -125,14 +125,10 @@ impl KeygenContext {
 
                 if self.with_card {
                     
-                    let tacc: u8 = 0;
-                    let gacc: u8 = 1;
                     let coef_a = signer.get_coef_a().serialize();
 
                     let command = jc::command::set_aggpubkey(
                agg_pubkey,
-                        gacc,
-                        tacc,
                         coef_a
                     );
 
@@ -586,19 +582,10 @@ mod jc {
                 .build()
         }
 
-        pub fn set_aggpubkey(aggkey_q: PublicKey, gacc: u8, tacc: u8, coef_a: [u8; SCALAR_LEN]) -> Vec<u8> {
-
-            let mut gacc_array = [0; SCALAR_LEN];
-            gacc_array[SCALAR_LEN - 1] = gacc;
-            //gacc_array[0] = gacc;
-
-            let mut tacc_array = [0; SCALAR_LEN];
-            tacc_array[SCALAR_LEN - 1] = tacc;
+        pub fn set_aggpubkey(aggkey_q: PublicKey, coef_a: [u8; SCALAR_LEN]) -> Vec<u8> {
 
             CommandBuilder::new(CLA, INS_SET_AGG_PUBKEY)
                 .extend(&reencode_point(&aggkey_q.serialize(), true).unwrap())
-                .extend(&gacc_array)
-                .extend(&tacc_array)
                 .extend(&coef_a)
                 .build()
         }
@@ -766,10 +753,7 @@ mod jc {
             (card, resp_buf) = prepare_card()?;
 
             // Must equal
-            let t: u8 = 3;
             let n: u8 = 3;
-            let tacc: u8 = 0;
-            let gacc: u8 = 1;
             let message = "Testing mssg123";
 
             let mut signers: [musig2::Signer; 3] = [musig2::Signer::new(), musig2::Signer::new(), musig2::Signer::new()];
@@ -807,7 +791,7 @@ mod jc {
 
             // set agg pubkey
             let agg_pubkey = signers[0].get_agg_pubkey();
-            let cmd = command::set_aggpubkey(agg_pubkey, gacc, tacc, signers[0].get_coef_a().serialize());
+            let cmd = command::set_aggpubkey(agg_pubkey, signers[0].get_coef_a().serialize());
             let resp = card.transmit(&cmd, &mut resp_buf)?;
             response::set_aggpubkey(resp)?;
 
