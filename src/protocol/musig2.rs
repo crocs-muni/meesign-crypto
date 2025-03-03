@@ -255,6 +255,11 @@ impl SignContext {
         }
 
         self.indices = Some(msg.indices.iter().map(|i| *i as u16).collect());
+
+        if (msg.data.len() > 255) && self.setup.with_card {
+            return Err("Card supports messages only up to 255 bytes".into())
+        }
+
         self.message = Some(msg.data);
 
         if self.setup.with_card {
@@ -398,7 +403,7 @@ impl SignContext {
                 // Get aggregated signature and if successful, return it to the server
                 match signer.get_agg_signature() {
                     Ok(signature) => {
-                        let msg = serialize_bcast(&signature.serialize().to_vec(), ProtocolType::Musig2)?;
+                        let msg = serialize_bcast(&signature, ProtocolType::Musig2)?;
                         self.round = SignRound::Done(signature);
                         Ok((msg, Recipient::Server))
                     }
@@ -754,7 +759,7 @@ mod jc {
 
             // Must equal
             let n: u8 = 3;
-            let message = "Testing mssg123";
+            let message = "Testing mssg123AD468FG8FD6849FGDFD8G84FD6G486";
 
             let mut signers: [musig2::Signer; 3] = [musig2::Signer::new(), musig2::Signer::new(), musig2::Signer::new()];
 
