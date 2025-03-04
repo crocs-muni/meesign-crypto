@@ -34,6 +34,7 @@ impl From<ProtocolId> for ProtocolType {
             ProtocolId::Gg18 => ProtocolType::Gg18,
             ProtocolId::Elgamal => ProtocolType::Elgamal,
             ProtocolId::Frost => ProtocolType::Frost,
+            ProtocolId::Musig2 => ProtocolType::Musig2,
         }
     }
 }
