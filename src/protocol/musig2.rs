@@ -700,7 +700,7 @@ mod jc {
 
         // Card must be in DEBUG mode
         #[test]
-        fn keygen_test() -> Result<(), Box<dyn Error>> {
+        fn keygen_card() -> Result<(), Box<dyn Error>> {
             let card;
             let mut resp_buf;
             (card, resp_buf) = prepare_card()?;
@@ -733,7 +733,7 @@ mod jc {
         }
 
         #[test]
-        fn full_round_test() -> Result<(), Box<dyn Error>> {
+        fn sign_card() -> Result<(), Box<dyn Error>> {
             let card;
             let mut resp_buf;
 

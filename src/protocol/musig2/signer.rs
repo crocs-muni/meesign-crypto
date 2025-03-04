@@ -1,5 +1,3 @@
-use core::panic;
-
 use ::musig2::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use musig2::adaptor::aggregate_partial_signatures;
 use musig2::secp::{MaybePoint, MaybeScalar};
@@ -11,8 +9,6 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use rand::rngs::OsRng;
-
-// Musig2 Signer Util
 
 const DUMMY_SKEY: [u8; 32] = [0; 32];
 
