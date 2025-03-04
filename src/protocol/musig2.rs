@@ -505,19 +505,10 @@ mod jc {
                 None => Err("Invalid point".into()),
             }
         }
-
-        // By GitHub Copilot
-        pub fn vec_removed<T: Clone>(vec: &[T], index: usize) -> Vec<T> {
-            vec.iter()
-                .enumerate()
-                .filter(|&(i, _)| i != index)
-                .map(|(_, item)| item.clone())
-                .collect()
-        }
     }
 
     pub mod command {
-        use ::musig2::secp256k1::{PublicKey, SecretKey};
+        use ::musig2::secp256k1::PublicKey;
         use musig2::AggNonce;
 
         use super::util::reencode_point;
@@ -526,42 +517,17 @@ mod jc {
         const SCALAR_LEN: usize = 32;
         const POINT_LEN: usize = 33;
 
-        const STATE_TRUE: u8 = 0xF4;
-        const STATE_FALSE: u8 = 0x2C;
-
-        const CLA: u8 = 0xA6;
-
-        const INS_RESET: u8 = 0x65;
+        pub const CLA: u8 = 0xA6;
 
         const INS_GENERATE_KEYS: u8 = 0xBB;
         const INS_GENERATE_NONCES: u8 = 0x5E;
         const INS_SIGN: u8 = 0x49;
 
-        const INS_GET_XONLY_PUBKEY: u8 = 0x8B;
         const INS_GET_PLAIN_PUBKEY: u8 = 0x5A;
         const INS_GET_PNONCE_SHARE: u8 = 0x35;
 
         const INS_SET_AGG_PUBKEY: u8 = 0x76;
         const INS_SET_AGG_NONCES: u8 = 0x9A;
-
-        pub fn keygen_with_sk(sk: &SecretKey) -> Vec<u8> {
-            let testing_value_switch: [u8; 5] = [
-                STATE_TRUE,
-                STATE_FALSE,
-                STATE_FALSE,
-                STATE_FALSE,
-                STATE_FALSE,
-            ];
-
-            CommandBuilder::new(CLA, INS_GENERATE_KEYS)
-                .extend(&testing_value_switch)
-                .extend(&sk.secret_bytes())
-                .build()
-        }
-
-        pub fn reset() -> Vec<u8> {
-            CommandBuilder::new(CLA, INS_RESET).build()
-        }
 
         pub fn keygen() -> Vec<u8> {
             CommandBuilder::new(CLA, INS_GENERATE_KEYS).build()
@@ -609,11 +575,6 @@ mod jc {
         use crate::protocol::apdu::parse_response;
         use crate::protocol::Result;
 
-        pub fn reset(raw: &[u8]) -> Result<()> {
-            parse_response(raw)?;
-            Ok(())
-        }
-
         pub fn keygen(raw: &[u8]) -> Result<()> {
             parse_response(raw)?;
             Ok(())
@@ -655,23 +616,39 @@ mod jc {
 
     #[cfg(test)]
     mod tests {
+
         use std::error::Error;
 
-        use crate::protocol::{
-            apdu::{parse_response, CommandBuilder},
-            musig2::{jc::command::sign, signer},
-        };
+        use crate::protocol::apdu::{parse_response, CardError, CommandBuilder};
 
         use super::{
             super::musig2,
             command::{self},
             response,
         };
-        use ::musig2::secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
+        use ::musig2::secp256k1::PublicKey;
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
         use pcsc::{self, Card};
 
-        use super::util::vec_removed;
+        const INS_RESET: u8 = 0x65;
+
+        fn reset_command() -> Vec<u8> {
+            CommandBuilder::new(command::CLA, INS_RESET).build()
+        }
+
+        fn reset_receive(raw: &[u8]) -> Result<(), CardError> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
+        // By GitHub Copilot
+        pub fn vec_removed<T: Clone>(vec: &[T], index: usize) -> Vec<T> {
+            vec.iter()
+                .enumerate()
+                .filter(|&(i, _)| i != index)
+                .map(|(_, item)| item.clone())
+                .collect()
+        }
 
         fn prepare_card() -> Result<(Card, [u8; 264]), Box<dyn Error>> {
             // connect to card
@@ -691,45 +668,11 @@ mod jc {
             parse_response(resp)?;
 
             // Reset card to default state
-            let cmd = command::reset();
+            let cmd = reset_command();
             let resp = card.transmit(&cmd, &mut resp_buf)?;
-            response::reset(resp)?;
+            reset_receive(resp)?;
 
             Ok((card, resp_buf))
-        }
-
-        // Card must be in DEBUG mode
-        #[test]
-        fn keygen_card() -> Result<(), Box<dyn Error>> {
-            let card;
-            let mut resp_buf;
-            (card, resp_buf) = prepare_card()?;
-
-            let seckey_bytes: &[u8; 32] = &[
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ];
-
-            let our_sk = SecretKey::from_byte_array(seckey_bytes)?;
-            let our_pair = Keypair::from_secret_key(&Secp256k1::new(), &our_sk);
-            let our_pk = our_pair.public_key();
-
-            // Generate PK on card
-            let cmd = command::keygen_with_sk(&our_sk);
-            let resp = card.transmit(&cmd, &mut resp_buf)?;
-            response::keygen(resp)?;
-
-            let cmd = command::get_plain_pubkey();
-            let resp = card.transmit(&cmd, &mut resp_buf)?;
-            let card_pubkey = response::get_plain_pubkey(resp)?;
-
-            // Generate PK on device
-            let signer = musig2::Signer::new_from_card(our_pk);
-            let device_pubkey = signer.pubkey();
-
-            assert_eq!(card_pubkey, device_pubkey);
-
-            Ok(())
         }
 
         #[test]
