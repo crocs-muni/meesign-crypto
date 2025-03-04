@@ -17,7 +17,6 @@ typetag = "0.2.1"
 elastic-elgamal = { version = "0.3.0", features = ["serde"], optional = true }
 rand = "0.8.5"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
-secp256k1 = { version = "0.30", features = ["rand"] }
 frost-secp256k1 = { git  = "https://github.com/dufkan/frost.git", branch = "serialize-state", features = ["serde"], optional = true }
 aes-gcm = "0.10.2"
 k256 = { version = "0.13.1", features = ["arithmetic"] }
@@ -27,7 +26,7 @@ x509-cert = { version = "0.2.5", features = ["builder"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 # https://github.com/RustCrypto/elliptic-curves/discussions/1005
 sha2 = { version = "0.10.7", features = ["oid"] }
-musig2 = { version = "0.2.0" , optional = true, features = ["serde"] }
+musig2 = { version = "0.2.0" , optional = true, features = ["serde", "secp256k1"] }
 ecies = "0.2.7"
 const-oid = "0.9.6"
 der = { version = "0.7.9", features = ["derive"] }

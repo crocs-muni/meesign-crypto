@@ -1,10 +1,13 @@
 use core::panic;
 
-use musig2::{AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature, PubNonce, SecondRound};
-use musig2::secp::{MaybeScalar, Scalar, MaybePoint};
+use ::musig2::secp256k1::{PublicKey, Secp256k1, SecretKey};
 use musig2::adaptor::aggregate_partial_signatures;
+use musig2::secp::{MaybePoint, MaybeScalar};
+use musig2::{
+    AggNonce, CompactSignature, FirstRound, KeyAggContext, LiftedSignature, PartialSignature,
+    PubNonce, SecondRound,
+};
 use rand::RngCore;
-use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use serde::{Deserialize, Serialize};
 
 use rand::rngs::OsRng;
@@ -16,17 +19,12 @@ const DUMMY_SKEY: [u8; 32] = [0; 32];
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Signer {
     with_card: bool,
-    // Public key share
     pubkey: PublicKey,
-    // Private key share
     seckey: Option<SecretKey>,
     key_agg_ctx: Option<KeyAggContext>,
-    // Index of the signer
     index: Option<usize>,
-    // Aggregated signature
-    agg_signature: Option<CompactSignature>, 
-    // Secret nonce
-    sec_nonce: Option<[u8; 32]>, 
+    agg_signature: Option<CompactSignature>,
+    secnonce: Option<[u8; 32]>,
     // Public nonce of the signer (with card only)
     pubnonce: Option<PubNonce>,
     // Pub nonces of other signers
@@ -34,27 +32,34 @@ pub struct Signer {
     // Partial signature of the signer (with card only)
     partial_signature: Option<PartialSignature>,
     // Partial signatures
-    partial_signatures: Option<Vec<(usize, PartialSignature)>>, 
-    // Message to be signed
-    message: Option<Vec<u8>>, 
+    partial_signatures: Option<Vec<(usize, PartialSignature)>>,
+    message: Option<Vec<u8>>,
+}
+
+impl Default for Signer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Signer {
     pub fn new() -> Self {
-
         let secp = Secp256k1::new();
-        let mut rng = OsRng::default();
-        let pair = secp.generate_keypair(&mut rng); 
-        let keypair = Keypair::from_secret_key(&secp, &pair.0);
+        let mut rng = OsRng;
+
+        let mut pubkey_array: [u8; 32] = [0; 32];
+        rng.fill_bytes(&mut pubkey_array);
+        let secret_key = SecretKey::from_byte_array(&pubkey_array).unwrap();
+        let public_key = PublicKey::from_secret_key(&secp, &secret_key);
 
         Self {
             with_card: false,
-            pubkey: keypair.public_key(),
-            seckey: Some(keypair.secret_key()),
+            pubkey: public_key,
+            seckey: Some(secret_key),
             key_agg_ctx: None,
             index: None,
             agg_signature: None,
-            sec_nonce: None,
+            secnonce: None,
             pubnonce: None,
             pub_nonces: None,
             message: None,
@@ -64,9 +69,6 @@ impl Signer {
     }
 
     pub fn new_from_card(pubkey: PublicKey) -> Self {
-        
-        let pubkey = pubkey;
-
         Self {
             with_card: true,
             pubkey: pubkey,
@@ -74,7 +76,7 @@ impl Signer {
             key_agg_ctx: None,
             index: None,
             agg_signature: None,
-            sec_nonce: None,
+            secnonce: None,
             pubnonce: None,
             pub_nonces: None,
             message: None,
@@ -84,58 +86,41 @@ impl Signer {
     }
 
     pub fn get_index(&self) -> usize {
-
-        match self.index {
-            None => panic!("Index not set"),
-            Some(_) => {}
+        if Option::is_none(&self.index) {
+            panic!("Index not set")
         }
-
-        return self.index.unwrap();
+        self.index.unwrap()
     }
 
-    // Share public key
     pub fn pubkey(&self) -> PublicKey {
-        return self.pubkey;
+        self.pubkey
     }
 
-    // Share secret key
     fn seckey(&self) -> SecretKey {
-
         match self.seckey {
             None => panic!("Secret key not set"),
-            Some(seckey) => return seckey,
+            Some(seckey) => seckey,
         }
     }
 
-    pub fn generate_key_agg_ctx(&mut self, all_pubkeys: Vec<PublicKey>, tweak: Option<[u8;32]>, xonly: bool) {
-
+    pub fn generate_key_agg_ctx(&mut self, all_pubkeys: Vec<PublicKey>) {
         // Get public key shares sorted in lexigraphical order (BIP0327)
         let mut pubkeys: Vec<PublicKey> = all_pubkeys.clone();
         pubkeys.push(self.pubkey());
-        let sorted_pubkeys: Vec<PublicKey>  = self.sort_pubkeys(pubkeys);
+        let sorted_pubkeys: Vec<PublicKey> = self.sort_pubkeys(pubkeys);
 
         // Set index of this signer in the sorted public keys
         self.set_index(sorted_pubkeys.clone());
 
         // Create key aggregation context
-        let mut ctx = KeyAggContext::new(sorted_pubkeys).unwrap();
-
-        // Apply tweak if provided
-        match tweak {
-            Some(tweak) => {
-                let tweak_scalar = Scalar::from_slice(&tweak).unwrap();
-                ctx = ctx.with_tweak(tweak_scalar, xonly).unwrap();
-            }
-            None => {}
-        }
+        let ctx = KeyAggContext::new(sorted_pubkeys).unwrap();
 
         self.key_agg_ctx = Some(ctx);
-
-        }
+    }
 
     pub fn get_agg_pubkey(&self) -> PublicKey {
         if let Some(ctx) = self.key_agg_ctx.as_ref() {
-            return ctx.aggregated_pubkey();
+            ctx.aggregated_pubkey()
         } else {
             panic!("Aggregated public key not initialized.");
         }
@@ -143,13 +128,16 @@ impl Signer {
 
     pub fn get_coef_a(&self) -> MaybeScalar {
         if let Some(ctx) = self.key_agg_ctx.as_ref() {
-            return ctx.key_coefficient(self.pubkey()).unwrap();
+            ctx.key_coefficient(self.pubkey()).unwrap()
         } else {
             panic!("Aggregated public key not initialized.");
         }
     }
 
-    pub fn set_partial_signature(&mut self, partial_signature: PartialSignature) -> Result<(), String> {
+    pub fn set_partial_signature(
+        &mut self,
+        partial_signature: PartialSignature,
+    ) -> Result<(), String> {
         if self.with_card {
             self.partial_signature = Some(partial_signature);
             Ok(())
@@ -168,7 +156,6 @@ impl Signer {
     }
 
     pub fn first_round(&mut self) {
-
         // Create an instance of OsRng
         let mut rng = OsRng;
 
@@ -176,40 +163,37 @@ impl Signer {
         let mut nonce_seed = [0u8; 32];
         rng.fill_bytes(&mut nonce_seed);
 
-        self.sec_nonce = Some(nonce_seed);
+        self.secnonce = Some(nonce_seed);
     }
 
     fn first_round_internal(&self) -> Result<FirstRound, String> {
+        match self.secnonce {
+            None => Err("Secret nonce not initialized".into()),
 
-        match self.sec_nonce {
-
-            None => {
-                return Err("Secret nonce not initialized".into());
-            }
-
-            Some(sec_nonce) => {
-                 // Secret key share
-                let seckey = if self.with_card {SecretKey::from_slice(&DUMMY_SKEY).unwrap()} 
-                                            else {self.seckey()};
+            Some(secnonce) => {
+                // Secret key share
+                let seckey = if self.with_card {
+                    SecretKey::from_slice(&DUMMY_SKEY).unwrap()
+                } else {
+                    self.seckey()
+                };
 
                 // Create first round for this signer
                 let first_round = musig2::FirstRound::new(
                     self.key_agg_ctx.clone().unwrap(),
-                    sec_nonce,
+                    secnonce,
                     self.get_index(),
-                    musig2::SecNonceSpices::new()
-                        .with_seckey(seckey)
+                    musig2::SecNonceSpices::new().with_seckey(seckey),
                 )
                 .unwrap();
 
                 // Store the first round
-                return Ok(first_round);
+                Ok(first_round)
             }
         }
     }
 
     pub fn get_pubnonce(&self) -> Result<PubNonce, String> {
-
         if self.with_card {
             match &self.pubnonce {
                 Some(pubnonce) => {
@@ -224,32 +208,31 @@ impl Signer {
         let first_round = self.first_round_internal();
 
         match first_round {
-            Ok(first_round) => {
-                return Ok(first_round.our_public_nonce());
-            }
-            Err(_) => {
-                return Err("Error getting pubnonce".into());
-            }
+            Ok(first_round) => Ok(first_round.our_public_nonce()),
+            Err(_) => Err("Error getting pubnonce".into()),
         }
     }
 
     // Add a public nonce of another signer to this signer's first round context
-    fn add_pubnonce(&mut self, nonce_index: &usize, pubnonce: PubNonce, first_round: &mut FirstRound) {
+    fn add_pubnonce(
+        &mut self,
+        nonce_index: &usize,
+        pubnonce: PubNonce,
+        first_round: &mut FirstRound,
+    ) {
+        let index: usize = *nonce_index;
 
-            let index: usize = nonce_index.clone();
+        let res = first_round.receive_nonce(index, pubnonce);
 
-            let res = first_round.receive_nonce(index, pubnonce);
-
-            match res {
-                Ok(_) => {}
-                Err(e) => {
-                    panic!("Error adding pubnonce: {:?}", e);
-                }
+        match res {
+            Ok(_) => {}
+            Err(e) => {
+                panic!("Error adding pubnonce: {:?}", e);
             }
+        }
     }
 
     pub fn get_aggnonce(&self) -> Result<AggNonce, String> {
-
         match &self.pub_nonces {
             None => return Err("Pubnonces not initialized".into()),
             Some(pub_nonces) => {
@@ -261,46 +244,44 @@ impl Signer {
         };
     }
 
-    pub fn second_round(&mut self, message: &Vec<u8>, pubnonces: Vec<(usize, PubNonce)>) {
-        self.message = Some(message.clone());
+    pub fn second_round(&mut self, message: &[u8], pubnonces: Vec<(usize, PubNonce)>) {
+        self.message = Some(message.to_owned());
         self.pub_nonces = Some(pubnonces.clone());
     }
 
     fn second_round_internal(&mut self) -> Result<SecondRound<Vec<u8>>, String> {
-
         let pubnonces = match &self.pub_nonces {
             Some(pubnonces) => pubnonces.clone(),
             None => return Err("Pubnonces not initialized".into()),
         };
-    
+
         let message = match &self.message {
             Some(message) => message.clone(),
             None => return Err("Message not initialized".into()),
         };
-    
+
         let mut first_round = self.first_round_internal().unwrap();
-    
+
         for (index, pubnonce) in pubnonces.iter() {
-            self.add_pubnonce(&index, pubnonce.clone(), &mut first_round);
+            self.add_pubnonce(index, pubnonce.clone(), &mut first_round);
         }
 
-        let second_round: SecondRound<Vec<u8>>;   
-        
-        if self.with_card {
+        let second_round: SecondRound<Vec<u8>> = if self.with_card {
             return Err("Card signers cant generate second round.".into());
         } else {
-            second_round = first_round.finalize::<Vec<u8>>(self.seckey(), message).unwrap();
-        }
+            first_round
+                .finalize::<Vec<u8>>(self.seckey(), message)
+                .unwrap()
+        };
 
         Ok(second_round)
     }
 
     pub fn get_partial_signature(&mut self) -> PartialSignature {
-
         if self.with_card {
             match &self.partial_signature {
                 Some(partial_signature) => {
-                    return partial_signature.clone();
+                    return *partial_signature;
                 }
                 None => {
                     panic!("No pubnonce set for card signer");
@@ -313,15 +294,17 @@ impl Signer {
             Err(_) => panic!("Second round not initialized"),
         };
 
-        return second_round.our_signature();
+        second_round.our_signature()
     }
 
-    pub fn receive_partial_signatures(&mut self, partial_signatures: Vec<(usize, PartialSignature)>) {
+    pub fn receive_partial_signatures(
+        &mut self,
+        partial_signatures: Vec<(usize, PartialSignature)>,
+    ) {
         self.partial_signatures = Some(partial_signatures);
     }
 
     pub fn get_agg_signature(&mut self) -> Result<CompactSignature, String> {
-
         let partial_signatures = match &self.partial_signatures {
             Some(partial_signatures) => partial_signatures.clone(),
             None => return Err("Partial signatures not initialized".into()),
@@ -334,18 +317,17 @@ impl Signer {
         };
 
         // Erase nonces for security reasons
-        self.sec_nonce = None;
+        self.secnonce = None;
         self.pub_nonces = None;
         self.partial_signatures = None;
 
-        return agg_signature;
+        agg_signature
     }
 
-    fn get_agg_signature_no_card (
-        &mut self, 
-        partial_signatures: Vec<(usize, MaybeScalar)>
+    fn get_agg_signature_no_card(
+        &mut self,
+        partial_signatures: Vec<(usize, MaybeScalar)>,
     ) -> Result<CompactSignature, String> {
-
         let mut sr = match self.second_round_internal() {
             Ok(sr) => sr,
             Err(_) => return Err("Second round not initialized".into()),
@@ -360,38 +342,22 @@ impl Signer {
             }
         }
 
-        return Ok(sr.finalize().unwrap());
+        Ok(sr.finalize().unwrap())
     }
 
-
     // Insipired by [`musig2::SecondRound::finalize`] method
-    fn get_agg_signature_with_card<T> (
+    fn get_agg_signature_with_card<T>(
         &mut self,
-        partial_signatures: Vec<(usize, MaybeScalar)>
+        partial_signatures: Vec<(usize, MaybeScalar)>,
     ) -> Result<T, String>
     where
-        T: From<LiftedSignature>, 
+        T: From<LiftedSignature>,
     {
-
-        //TODO: Add partial signature correctness check
-        // for partial_signature in partial_signatures {
-        //     verify_partial(
-        //        &self.key_agg_ctx.clone().unwrap(),
-        //         partial_signature.1,
-        //         &self.get_aggnonce()?, 
-        //         MaybePoint::Infinity,
-        //         &self.key_agg_ctx,
-        //         individual_pubnonce, 
-        //         message);
-        // }
-
         let mut sorted_partial_signatures = partial_signatures.clone();
         sorted_partial_signatures.push((self.get_index(), self.get_partial_signature()));
         sorted_partial_signatures.sort_by(|a, b| a.0.cmp(&b.0));
-        let sorted_partial_signatures: Vec<PartialSignature> = sorted_partial_signatures
-            .iter()
-            .map(|x| x.1)
-            .collect();
+        let sorted_partial_signatures: Vec<PartialSignature> =
+            sorted_partial_signatures.iter().map(|x| x.1).collect();
 
         let aggnonce = self.get_aggnonce()?;
         let message = self.message.as_ref().unwrap();
@@ -401,7 +367,7 @@ impl Signer {
             &aggnonce,
             MaybePoint::Infinity,
             sorted_partial_signatures,
-            &message
+            message,
         );
 
         let agg_sig = sig
@@ -409,20 +375,20 @@ impl Signer {
             .adapt(MaybeScalar::Zero)
             .expect("finalizing with empty adaptor should never result in an adaptor failure");
 
-        return Ok(T::from(agg_sig));
+        Ok(T::from(agg_sig))
     }
 
     fn sort_pubkeys(&mut self, pubkeys: Vec<PublicKey>) -> Vec<PublicKey> {
         let mut pubkeys = pubkeys;
-        pubkeys.sort_by(|a, b| a.serialize().cmp(&b.serialize()));
+        pubkeys.sort_by_key(|a| a.serialize());
 
-        return pubkeys;
+        pubkeys
     }
 
     fn set_index(&mut self, pubkeys: Vec<PublicKey>) {
         let index = pubkeys.iter().position(|&x| x == self.pubkey());
 
-        if index == None {
+        if Option::is_none(&index) {
             panic!("Public key not found in the list of public keys");
         }
 
