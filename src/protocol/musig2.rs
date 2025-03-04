@@ -517,17 +517,26 @@ mod jc {
         const SCALAR_LEN: usize = 32;
         const POINT_LEN: usize = 33;
 
-        pub const CLA: u8 = 0xA6;
+        const CLA: u8 = 0xA6;
+
+        #[cfg(test)]
+        const INS_RESET: u8 = 0x65;
 
         const INS_GENERATE_KEYS: u8 = 0xBB;
         const INS_GENERATE_NONCES: u8 = 0x5E;
         const INS_SIGN: u8 = 0x49;
+
 
         const INS_GET_PLAIN_PUBKEY: u8 = 0x5A;
         const INS_GET_PNONCE_SHARE: u8 = 0x35;
 
         const INS_SET_AGG_PUBKEY: u8 = 0x76;
         const INS_SET_AGG_NONCES: u8 = 0x9A;
+
+        #[cfg(test)]
+        pub fn reset() -> Vec<u8> {
+            CommandBuilder::new(CLA, INS_RESET).build()
+        }
 
         pub fn keygen() -> Vec<u8> {
             CommandBuilder::new(CLA, INS_GENERATE_KEYS).build()
@@ -575,6 +584,12 @@ mod jc {
         use crate::protocol::apdu::parse_response;
         use crate::protocol::Result;
 
+        #[cfg(test)]
+        pub fn reset(raw: &[u8]) -> Result<()> {
+            parse_response(raw)?;
+            Ok(())
+        }
+
         pub fn keygen(raw: &[u8]) -> Result<()> {
             parse_response(raw)?;
             Ok(())
@@ -619,7 +634,7 @@ mod jc {
 
         use std::error::Error;
 
-        use crate::protocol::apdu::{parse_response, CardError, CommandBuilder};
+        use crate::protocol::apdu::{parse_response, CommandBuilder};
 
         use super::{
             super::musig2,
@@ -629,17 +644,6 @@ mod jc {
         use ::musig2::secp256k1::PublicKey;
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
         use pcsc::{self, Card};
-
-        const INS_RESET: u8 = 0x65;
-
-        fn reset_command() -> Vec<u8> {
-            CommandBuilder::new(command::CLA, INS_RESET).build()
-        }
-
-        fn reset_receive(raw: &[u8]) -> Result<(), CardError> {
-            parse_response(raw)?;
-            Ok(())
-        }
 
         // By GitHub Copilot
         pub fn vec_removed<T: Clone>(vec: &[T], index: usize) -> Vec<T> {
@@ -668,9 +672,9 @@ mod jc {
             parse_response(resp)?;
 
             // Reset card to default state
-            let cmd = reset_command();
+            let cmd = command::reset();
             let resp = card.transmit(&cmd, &mut resp_buf)?;
-            reset_receive(resp)?;
+            response::reset(resp)?;
 
             Ok((card, resp_buf))
         }
