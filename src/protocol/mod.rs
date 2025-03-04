@@ -4,6 +4,8 @@ pub mod elgamal;
 pub mod frost;
 #[cfg(feature = "gg18")]
 pub mod gg18;
+#[cfg(feature = "musig2")]
+pub mod musig2;
 
 mod apdu;
 

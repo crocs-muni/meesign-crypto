@@ -16,6 +16,7 @@ pub enum ProtocolType {
     Gg18,
     Elgamal,
     Frost,
+    Musig2,
 }
 
 impl From<ProtocolType> for proto::ProtocolType {
@@ -24,6 +25,7 @@ impl From<ProtocolType> for proto::ProtocolType {
             ProtocolType::Gg18 => proto::ProtocolType::Gg18,
             ProtocolType::Elgamal => proto::ProtocolType::Elgamal,
             ProtocolType::Frost => proto::ProtocolType::Frost,
+            ProtocolType::Musig2 => proto::ProtocolType::Musig2,
         }
     }
 }
