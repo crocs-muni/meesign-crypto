@@ -41,11 +41,11 @@ pub(crate) trait ThresholdProtocol: Protocol {
 mod tests {
     use super::*;
 
-    use prost::{bytes::Bytes, Message as _};
+    use prost::Message as _;
     use std::collections::HashMap;
 
     use crate::proto::{
-        ClientMessage, ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,
+        ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,
     };
 
     pub(super) trait KeygenProtocolTest: KeygenProtocol + Sized {
@@ -65,8 +65,8 @@ mod tests {
             let mut messages: HashMap<u32, _> = ctxs
                 .iter_mut()
                 .map(|(&index, ctx)| {
-                    let msg = ClientMessage::decode::<Bytes>(
-                        ctx.advance(
+                    let msg = ctx
+                        .advance(
                             &(ProtocolGroupInit {
                                 protocol_type: Self::PROTOCOL_TYPE as i32,
                                 index,
@@ -76,10 +76,7 @@ mod tests {
                             .encode_to_vec(),
                         )
                         .unwrap()
-                        .0
-                        .into(),
-                    )
-                    .unwrap();
+                        .encode(Self::PROTOCOL_TYPE);
                     (index, msg)
                 })
                 .collect();
@@ -104,8 +101,8 @@ mod tests {
                             }
                         }
 
-                        let msg = ClientMessage::decode::<Bytes>(
-                            ctx.advance(
+                        let msg = ctx
+                            .advance(
                                 &(ServerMessage {
                                     protocol_type: Self::PROTOCOL_TYPE as i32,
                                     unicasts,
@@ -114,10 +111,7 @@ mod tests {
                                 .encode_to_vec(),
                             )
                             .unwrap()
-                            .0
-                            .into(),
-                        )
-                        .unwrap();
+                            .encode(Self::PROTOCOL_TYPE);
                         (idx, msg)
                     })
                     .collect();
@@ -156,8 +150,8 @@ mod tests {
             let mut messages: HashMap<u32, _> = ctxs
                 .iter_mut()
                 .map(|(&index, ctx)| {
-                    let msg = ClientMessage::decode::<Bytes>(
-                        ctx.advance(
+                    let msg = ctx
+                        .advance(
                             &(ProtocolInit {
                                 protocol_type: Self::PROTOCOL_TYPE as i32,
                                 indices: indices.clone(),
@@ -167,10 +161,7 @@ mod tests {
                             .encode_to_vec(),
                         )
                         .unwrap()
-                        .0
-                        .into(),
-                    )
-                    .unwrap();
+                        .encode(Self::PROTOCOL_TYPE);
                     (index, msg)
                 })
                 .collect();
@@ -195,8 +186,8 @@ mod tests {
                             }
                         }
 
-                        let msg = ClientMessage::decode::<Bytes>(
-                            ctx.advance(
+                        let msg = ctx
+                            .advance(
                                 &(ServerMessage {
                                     protocol_type: Self::PROTOCOL_TYPE as i32,
                                     unicasts,
@@ -205,10 +196,7 @@ mod tests {
                                 .encode_to_vec(),
                             )
                             .unwrap()
-                            .0
-                            .into(),
-                        )
-                        .unwrap();
+                            .encode(Self::PROTOCOL_TYPE);
                         (idx, msg)
                     })
                     .collect();

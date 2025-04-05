@@ -272,6 +272,7 @@ mod tests {
     use sha2::Digest;
 
     use super::*;
+    use crate::proto::ProtocolType;
     use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
 
     impl KeygenProtocolTest for KeygenContext {
