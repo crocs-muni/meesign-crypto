@@ -5,6 +5,7 @@ use mpecdsa::{gg18_key_gen::*, gg18_sign::*};
 use prost::Message;
 // TODO: use bincode instead?
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct KeygenContext {

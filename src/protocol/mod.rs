@@ -1,33 +1,33 @@
-#[cfg(feature = "elgamal")]
 pub mod elgamal;
-#[cfg(feature = "frost")]
 pub mod frost;
-#[cfg(feature = "gg18")]
 pub mod gg18;
 
+#[cfg(feature = "frost")]
 mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-use std::collections::HashMap;
-
+#[cfg(feature = "protocol")]
 pub enum Recipient {
     Card,
     Server,
 }
 
+#[cfg(feature = "protocol")]
 #[typetag::serde]
 pub trait Protocol {
     fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)>;
     fn finish(self: Box<Self>) -> Result<Vec<u8>>;
 }
 
+#[cfg(feature = "protocol")]
 pub trait KeygenProtocol: Protocol {
     fn new() -> Self
     where
         Self: Sized;
 }
 
+#[cfg(feature = "protocol")]
 pub trait ThresholdProtocol: Protocol {
     fn new(group: &[u8]) -> Self
     where
