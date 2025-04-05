@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[derive(Clone)]
 pub(crate) enum Message {
     Unicast(HashMap<u32, Vec<u8>>),
+    Broadcast(Vec<u8>),
     ReliableBroadcast(Vec<u8>),
     CardCommand(Vec<u8>),
 }
@@ -13,6 +14,9 @@ pub(crate) enum Message {
 impl Message {
     pub fn raw_unicast(data: HashMap<u32, Vec<u8>>) -> Self {
         Self::Unicast(data.into_iter().collect())
+    }
+    pub fn raw_broadcast(data: Vec<u8>) -> Self {
+        Self::Broadcast(data)
     }
     pub fn raw_reliable_broadcast(data: Vec<u8>) -> Self {
         Self::ReliableBroadcast(data)
@@ -31,6 +35,9 @@ impl Message {
             .collect::<serde_json::Result<_>>()?;
         Ok(Self::raw_unicast(data))
     }
+    pub fn serialize_broadcast<T: Serialize>(value: &T) -> serde_json::Result<Self> {
+        Ok(Self::raw_broadcast(serde_json::to_vec(value)?))
+    }
     pub fn serialize_reliable_broadcast<T: Serialize>(value: &T) -> serde_json::Result<Self> {
         Ok(Self::raw_reliable_broadcast(serde_json::to_vec(value)?))
     }
@@ -40,6 +47,11 @@ impl Message {
                 protocol_type: protocol_type.into(),
                 unicasts: data,
                 broadcast: None,
+            },
+            Self::Broadcast(data) => ClientMessage {
+                protocol_type: protocol_type.into(),
+                unicasts: HashMap::new(),
+                broadcast: Some(data),
             },
             Self::ReliableBroadcast(data) => ClientMessage {
                 protocol_type: protocol_type.into(),

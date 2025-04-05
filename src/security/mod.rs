@@ -73,6 +73,7 @@ fn secure_message(
             }
             Message::Unicast(data)
         }
+        Message::Broadcast(data) => Message::Broadcast(sign_bcast(data)?),
         Message::ReliableBroadcast(data) => Message::ReliableBroadcast(sign_bcast(data)?),
         Message::CardCommand(_) => unreachable!(),
     };
@@ -91,6 +92,7 @@ fn finalize_round(
             return Ok((State::CardResponse, data, Recipient::Card))
         },
         msg @ Message::Unicast(_) => (State::Running, msg, Recipient::Server),
+        msg @ Message::Broadcast(_) => (State::Running, msg, Recipient::Server),
         Message::ReliableBroadcast(data) => (
             State::BroadcastExchange(data.clone()),
             Message::ReliableBroadcast(data),

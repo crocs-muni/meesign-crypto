@@ -4,7 +4,7 @@ mod implementation;
 pub(crate) use implementation::*;
 
 pub const KEYGEN_ROUNDS: u16 = 4 + 2;
-pub const DECRYPT_ROUNDS: u16 = 2 + 1;
+pub const DECRYPT_ROUNDS: u16 = 2;
 
 #[cfg(feature = "elgamal-encrypt")]
 mod encrypt;

@@ -104,7 +104,7 @@ impl KeygenContext {
                 let (key, pubkey) = frost::keys::dkg::part3(secret, round1, &round2)?;
 
                 if !self.with_card {
-                    let msg = Message::serialize_reliable_broadcast(&pubkey.verifying_key())?;
+                    let msg = Message::serialize_broadcast(&pubkey.verifying_key())?;
                     (KeygenRound::Done(*setup, Some(key), pubkey), msg)
                 } else {
                     let command = jc::command::setup(
@@ -119,7 +119,7 @@ impl KeygenContext {
             }
             KeygenRound::R21AwaitSetupResp(setup, pubkey) => {
                 jc::response::setup(data)?;
-                let msg =                     Message::serialize_reliable_broadcast(&pubkey.verifying_key())?;
+                let msg =                     Message::serialize_broadcast(&pubkey.verifying_key())?;
                 (KeygenRound::Done(*setup, None, pubkey.clone()), msg)
             }
             KeygenRound::Done(_, _, _) => return Err("protocol already finished".into()),
@@ -196,7 +196,7 @@ impl SignContext {
         if let Some(key) = &self.key {
             let (nonces, commitments) = frost::round1::commit(key.signing_share(), &mut OsRng);
 
-            let msg = Message::serialize_reliable_broadcast(&commitments)?;
+            let msg = Message::serialize_broadcast(&commitments)?;
             self.round = SignRound::R1(Some(nonces), commitments);
             Ok(msg)
         } else {
@@ -211,7 +211,7 @@ impl SignContext {
             SignRound::R0 => Err("protocol not initialized".into()),
             SignRound::R01AwaitCommitResp => {
                 let commitments = jc::response::commit(data)?;
-                let msg = Message::serialize_reliable_broadcast(&commitments)?;
+                let msg = Message::serialize_broadcast(&commitments)?;
                 self.round = SignRound::R1(None, commitments);
                 Ok(msg)
             }
@@ -231,7 +231,7 @@ impl SignContext {
                 if let Some(key) = &self.key {
                     let share =
                         frost::round2::sign(&signing_package, nonces.as_ref().unwrap(), key)?;
-                    let msg = Message::serialize_reliable_broadcast(&share)?;
+                    let msg = Message::serialize_broadcast(&share)?;
                     self.round = SignRound::R2(signing_package, share);
                     Ok(msg)
                 } else {
@@ -271,7 +271,7 @@ impl SignContext {
             }
             SignRound::R12AwaitSignResp(signing_package) => {
                 let share = jc::response::sign(data)?;
-                let msg = Message::serialize_reliable_broadcast(&share)?;
+                let msg = Message::serialize_broadcast(&share)?;
                 self.round = SignRound::R2(signing_package.clone(), share);
                 Ok(msg)
             }
@@ -285,7 +285,7 @@ impl SignContext {
 
                 let signature = frost::aggregate(signing_package, &shares, &self.pubkey)?;
 
-                let msg = Message::serialize_reliable_broadcast(&signature)?;
+                let msg = Message::serialize_broadcast(&signature)?;
                 self.round = SignRound::Done(signature);
                 Ok(msg)
             }

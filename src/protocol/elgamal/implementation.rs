@@ -169,7 +169,7 @@ impl DecryptContext {
 
         let (share, proof) = self.ctx.decrypt_share(self.encrypted_key, &mut OsRng);
 
-        let msg = Message::serialize_reliable_broadcast(
+        let msg = Message::serialize_broadcast(
             &serde_json::to_string(&(share, proof))?.as_bytes(),
         )?;
 
@@ -228,7 +228,7 @@ impl DecryptContext {
 
         self.result = Some(msg.clone());
 
-        let msg = Message::raw_reliable_broadcast(msg);
+        let msg = Message::raw_broadcast(msg);
         Ok(msg)
     }
 }

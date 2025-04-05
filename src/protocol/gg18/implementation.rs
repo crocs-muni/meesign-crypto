@@ -154,7 +154,7 @@ impl SignContext {
         };
 
         let (out, c1) = gg18_sign1(c0, indices, local_index, msg.data)?;
-        let msg = Message::serialize_reliable_broadcast(&out)?;
+        let msg = Message::serialize_broadcast(&out)?;
         self.round = SignRound::R1(c1);
         Ok(msg)
     }
@@ -179,56 +179,56 @@ impl SignContext {
                 let msgs = deserialize_map(&data.unicasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c3) = gg18_sign3(msgs, c2.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R3(c3), msg)
             }
             SignRound::R3(c3) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c4) = gg18_sign4(msgs, c3.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R4(c4), msg)
             }
             SignRound::R4(c4) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c5) = gg18_sign5(msgs, c4.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R5(c5), msg)
             }
             SignRound::R5(c5) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c6) = gg18_sign6(msgs, c5.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R6(c6), msg)
             }
             SignRound::R6(c6) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c7) = gg18_sign7(msgs, c6.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R7(c7), msg)
             }
             SignRound::R7(c7) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c8) = gg18_sign8(msgs, c7.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R8(c8), msg)
             }
             SignRound::R8(c8) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let (out, c9) = gg18_sign9(msgs, c8.clone())?;
-                let msg = Message::serialize_reliable_broadcast(&out)?;
+                let msg = Message::serialize_broadcast(&out)?;
                 (SignRound::R9(c9), msg)
             }
             SignRound::R9(c9) => {
                 let msgs = deserialize_map(&data.broadcasts)?;
                 let msgs = map_to_sorted_vec(msgs);
                 let sig = gg18_sign10(msgs, c9.clone())?;
-                let msg = Message::raw_reliable_broadcast(sig.clone());
+                let msg = Message::raw_broadcast(sig.clone());
                 (SignRound::Done(sig), msg)
             }
             SignRound::Done(_) => todo!(),

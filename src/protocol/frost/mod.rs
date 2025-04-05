@@ -4,4 +4,4 @@ mod implementation;
 pub(crate) use implementation::*;
 
 pub const KEYGEN_ROUNDS: u16 = 3 + 1;
-pub const SIGN_ROUNDS: u16 = 3 + 2;
+pub const SIGN_ROUNDS: u16 = 3;
