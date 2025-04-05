@@ -14,21 +14,24 @@ pub enum Recipient {
 }
 
 #[cfg(feature = "protocol")]
+use crate::util::Message;
+
+#[cfg(feature = "protocol")]
 #[typetag::serde]
-pub trait Protocol {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)>;
+pub(crate) trait Protocol {
+    fn advance(&mut self, data: &[u8]) -> Result<Message>;
     fn finish(self: Box<Self>) -> Result<Vec<u8>>;
 }
 
 #[cfg(feature = "protocol")]
-pub trait KeygenProtocol: Protocol {
+pub(crate) trait KeygenProtocol: Protocol {
     fn new() -> Self
     where
         Self: Sized;
 }
 
 #[cfg(feature = "protocol")]
-pub trait ThresholdProtocol: Protocol {
+pub(crate) trait ThresholdProtocol: Protocol {
     fn new(group: &[u8]) -> Self
     where
         Self: Sized;

@@ -1,6 +1,6 @@
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
-use crate::util::{deserialize_map, encode_raw_bcast, serialize_bcast, serialize_uni};
+use crate::util::{deserialize_map, Message};
 use curve25519_dalek::{
     ristretto::RistrettoPoint,
     scalar::Scalar,
@@ -17,7 +17,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes128Gcm,
 };
-use prost::Message;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ enum KeygenRound {
 }
 
 impl KeygenContext {
-    fn init(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
         let msg = ProtocolGroupInit::decode(data)?;
 
         if msg.protocol_type != ProtocolType::Elgamal as i32 {
@@ -52,12 +52,12 @@ impl KeygenContext {
         let dkg =
             ParticipantCollectingCommitments::<Ristretto>::new(params, index.into(), &mut OsRng);
         let c = dkg.commitment();
-        let msg = serialize_bcast(&c, ProtocolType::Elgamal)?;
+        let msg = Message::serialize_reliable_broadcast(&c)?;
         self.round = KeygenRound::R1(dkg);
         Ok(msg)
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
         let msgs = ServerMessage::decode(data)?;
 
         let (c, msg) = match &self.round {
@@ -73,7 +73,7 @@ impl KeygenContext {
                 }
                 let dkg = dkg.finish_commitment_phase();
                 let public_info = dkg.public_info();
-                let msg = serialize_bcast(&public_info, ProtocolType::Elgamal)?;
+                let msg = Message::serialize_reliable_broadcast(&public_info)?;
 
                 (KeygenRound::R2(dkg), msg)
             }
@@ -93,7 +93,7 @@ impl KeygenContext {
                     .into_keys()
                     .map(|i| (i, dkg.secret_share_for_participant(i as usize)));
 
-                let msg = serialize_uni(shares, ProtocolType::Elgamal)?;
+                let msg = Message::serialize_unicast(shares)?;
 
                 (KeygenRound::R3(dkg), msg)
             }
@@ -108,9 +108,8 @@ impl KeygenContext {
                 }
                 let dkg = dkg.complete()?;
 
-                let msg = encode_raw_bcast(
+                let msg = Message::raw_reliable_broadcast(
                     dkg.key_set().shared_key().as_bytes().to_vec(),
-                    ProtocolType::Elgamal,
                 );
                 (KeygenRound::Done(dkg), msg)
             }
@@ -124,12 +123,12 @@ impl KeygenContext {
 
 #[typetag::serde(name = "elgamal_keygen")]
 impl Protocol for KeygenContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = match self.round {
             KeygenRound::R0 => self.init(data),
             _ => self.update(data),
         }?;
-        Ok((data, Recipient::Server))
+        Ok(data)
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>> {
@@ -158,7 +157,7 @@ pub(crate) struct DecryptContext {
 }
 
 impl DecryptContext {
-    fn init(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
         let msg = ProtocolInit::decode(data)?;
 
         if msg.protocol_type != ProtocolType::Elgamal as i32 {
@@ -170,9 +169,8 @@ impl DecryptContext {
 
         let (share, proof) = self.ctx.decrypt_share(self.encrypted_key, &mut OsRng);
 
-        let msg = serialize_bcast(
+        let msg = Message::serialize_reliable_broadcast(
             &serde_json::to_string(&(share, proof))?.as_bytes(),
-            ProtocolType::Elgamal,
         )?;
 
         let share = (self.ctx.index(), share);
@@ -181,7 +179,7 @@ impl DecryptContext {
         Ok(msg)
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
         if self.shares.is_empty() {
             return Err("protocol not initialized".into());
         }
@@ -230,20 +228,20 @@ impl DecryptContext {
 
         self.result = Some(msg.clone());
 
-        let msg = encode_raw_bcast(msg, ProtocolType::Elgamal);
+        let msg = Message::raw_reliable_broadcast(msg);
         Ok(msg)
     }
 }
 
 #[typetag::serde(name = "elgamal_decrypt")]
 impl Protocol for DecryptContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = if self.shares.is_empty() {
             self.init(data)
         } else {
             self.update(data)
         }?;
-        Ok((data, Recipient::Server))
+        Ok(data)
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>> {

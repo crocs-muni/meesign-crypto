@@ -3,6 +3,57 @@ use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Clone)]
+pub(crate) enum Message {
+    Unicast(HashMap<u32, Vec<u8>>),
+    ReliableBroadcast(Vec<u8>),
+    CardCommand(Vec<u8>),
+}
+
+impl Message {
+    pub fn raw_unicast(data: HashMap<u32, Vec<u8>>) -> Self {
+        Self::Unicast(data.into_iter().collect())
+    }
+    pub fn raw_reliable_broadcast(data: Vec<u8>) -> Self {
+        Self::ReliableBroadcast(data)
+    }
+    pub fn new_card_command(data: Vec<u8>) -> Self {
+        Self::CardCommand(data)
+    }
+    pub fn serialize_unicast<T, I>(kvs: I) -> serde_json::Result<Self>
+    where
+        I: IntoIterator<Item = (u32, T)>,
+        T: Serialize,
+    {
+        let data = kvs
+            .into_iter()
+            .map(|(k, v)| Ok((k, serde_json::to_vec(&v)?)))
+            .collect::<serde_json::Result<_>>()?;
+        Ok(Self::raw_unicast(data))
+    }
+    pub fn serialize_reliable_broadcast<T: Serialize>(value: &T) -> serde_json::Result<Self> {
+        Ok(Self::raw_reliable_broadcast(serde_json::to_vec(value)?))
+    }
+    pub fn encode(self, protocol_type: ProtocolType) -> ClientMessage {
+        match self {
+            Self::Unicast(data) => ClientMessage {
+                protocol_type: protocol_type.into(),
+                unicasts: data,
+                broadcast: None,
+            },
+            Self::ReliableBroadcast(data) => ClientMessage {
+                protocol_type: protocol_type.into(),
+                unicasts: HashMap::new(),
+                broadcast: Some(data),
+            },
+            Self::CardCommand(_) => unreachable!(),
+        }
+    }
+    pub fn encode_to_vec(self, protocol_type: ProtocolType) -> Vec<u8> {
+        self.encode(protocol_type).encode_to_vec()
+    }
+}
+
 /// Deserializes values in a `HashMap`
 pub fn deserialize_map<'de, T: Deserialize<'de>>(
     map: &'de HashMap<u32, Vec<u8>>,
@@ -10,50 +61,4 @@ pub fn deserialize_map<'de, T: Deserialize<'de>>(
     map.iter()
         .map(|(k, v)| Ok((*k, serde_json::from_slice::<T>(v.as_slice())?)))
         .collect()
-}
-
-/// Encode a broadcast message to protobuf format
-pub fn encode_raw_bcast(message: Vec<u8>, protocol_type: ProtocolType) -> Vec<u8> {
-    ClientMessage {
-        protocol_type: protocol_type.into(),
-        unicasts: HashMap::new(),
-        broadcast: Some(message),
-    }
-    .encode_to_vec()
-}
-
-/// Serialize and encode a broadcast message to protobuf format
-pub fn serialize_bcast<T: Serialize>(
-    value: &T,
-    protocol_type: ProtocolType,
-) -> serde_json::Result<Vec<u8>> {
-    let message = serde_json::to_vec(value)?;
-    Ok(encode_raw_bcast(message, protocol_type))
-}
-
-/// Encode unicast messages to protobuf format
-///
-/// Each message is associated with an index as used by a respective protocol
-pub fn encode_raw_uni(messages: HashMap<u32, Vec<u8>>, protocol_type: ProtocolType) -> Vec<u8> {
-    ClientMessage {
-        protocol_type: protocol_type.into(),
-        unicasts: messages,
-        broadcast: None,
-    }
-    .encode_to_vec()
-}
-
-/// Serialize and encode unicast messages to protobuf format
-///
-/// Each message is associated with an index as used by a respective protocol
-pub fn serialize_uni<T, I>(kvs: I, protocol_type: ProtocolType) -> serde_json::Result<Vec<u8>>
-where
-    I: IntoIterator<Item = (u32, T)>,
-    T: Serialize,
-{
-    let messages = kvs
-        .into_iter()
-        .map(|(k, v)| Ok((k, serde_json::to_vec(&v)?)))
-        .collect::<serde_json::Result<_>>()?;
-    Ok(encode_raw_uni(messages, protocol_type))
 }
