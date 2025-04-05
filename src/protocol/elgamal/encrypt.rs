@@ -7,7 +7,7 @@ use elastic_elgamal::{group::{ElementOps, Ristretto}, PublicKey};
 use aes_gcm::{aead::{Aead, AeadCore, KeyInit, Payload}, Aes128Gcm};
 use rand::rngs::OsRng;
 
-fn try_encode(message: &[u8]) -> Option<RistrettoPoint> {
+pub(crate) fn try_encode(message: &[u8]) -> Option<RistrettoPoint> {
     if message.len() > 30 {
         return None;
     }

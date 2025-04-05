@@ -39,6 +39,7 @@ mod tests {
     use super::*;
 
     use prost::{bytes::Bytes, Message as _};
+    use std::collections::HashMap;
 
     use crate::proto::{
         ClientMessage, ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,

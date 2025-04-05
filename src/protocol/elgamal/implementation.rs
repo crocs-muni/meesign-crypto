@@ -277,6 +277,7 @@ fn decode(p: RistrettoPoint) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::elgamal::encrypt::{encrypt, try_encode};
     use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
     use rand::seq::IteratorRandom;
 
