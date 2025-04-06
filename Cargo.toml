@@ -26,7 +26,7 @@ x509-cert = { version = "0.2.5", features = ["builder"] }
 p256 = { version = "0.13.2", features = ["ecdsa"] }
 # https://github.com/RustCrypto/elliptic-curves/discussions/1005
 sha2 = { version = "0.10.7", features = ["oid"] }
-ecies = "0.2.7"
+ecies = { version = "0.2.9", default-features = false, features = ["aes-rust"] }
 const-oid = "0.9.6"
 der = { version = "0.7.9", features = ["derive"] }
 
