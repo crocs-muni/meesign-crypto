@@ -272,7 +272,7 @@ mod tests {
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
     use rand::{rngs::OsRng, seq::IteratorRandom};
     use sha2::Digest;
-    
+
     use crate::proto::ProtocolType;
 
     impl KeygenProtocolTest for KeygenContext {

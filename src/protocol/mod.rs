@@ -45,9 +45,7 @@ mod tests {
     use prost::Message as _;
     use std::collections::HashMap;
 
-    use crate::proto::{
-        ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,
-    };
+    use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 
     pub(super) trait KeygenProtocolTest: KeygenProtocol + Sized {
         // Cannot be added in Protocol (yet) due to typetag Trait limitations

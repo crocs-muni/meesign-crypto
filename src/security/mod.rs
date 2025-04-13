@@ -91,8 +91,8 @@ fn finalize_round(
     let (state, msg, recipient) = match msg {
         Message::CardCommand(data) => {
             // NOTE: We just pass card commands through
-            return Ok((State::CardResponse, data, Recipient::Card))
-        },
+            return Ok((State::CardResponse, data, Recipient::Card));
+        }
         msg @ Message::Unicast(_) => (State::Running, msg, Recipient::Server),
         msg @ Message::Broadcast(_) => (State::Running, msg, Recipient::Server),
         Message::ReliableBroadcast(data) => (

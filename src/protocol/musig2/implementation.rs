@@ -1,14 +1,14 @@
-use std::convert::TryInto;
 use std::collections::HashMap;
+use std::convert::TryInto;
 
+use super::signer::Signer;
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
 use crate::util::{deserialize_map, Message};
 use ::musig2::secp256k1::PublicKey;
 use ::musig2::{CompactSignature, PartialSignature, PubNonce};
-use serde::{Deserialize, Serialize};
-use super::signer::Signer;
 use prost::Message as _;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Setup {
@@ -43,7 +43,6 @@ impl KeygenContext {
     }
 
     fn init(&mut self, data: &[u8]) -> Result<Message> {
-        
         let msg = ProtocolGroupInit::decode(data)?;
 
         if msg.protocol_type != ProtocolType::Musig2 as i32 {
@@ -86,7 +85,7 @@ impl KeygenContext {
                 let command = jc::command::get_plain_pubkey();
                 (
                     KeygenRound::R0AwaitGetPubkey(*setup),
-                    Message::new_card_command(command)
+                    Message::new_card_command(command),
                 )
             }
             KeygenRound::R0AwaitGetPubkey(setup) => {
@@ -123,12 +122,12 @@ impl KeygenContext {
 
                     (
                         KeygenRound::R1AwaitAggkeyLoad(*setup, signer.clone()),
-                        Message::new_card_command(command)
+                        Message::new_card_command(command),
                     )
                 } else {
                     (
                         KeygenRound::Done(*setup, signer.clone()),
-                        Message::serialize_broadcast(&agg_pubkey)?
+                        Message::serialize_broadcast(&agg_pubkey)?,
                     )
                 }
             }
@@ -138,7 +137,7 @@ impl KeygenContext {
 
                 (
                     KeygenRound::Done(*setup, signer.clone()),
-                    Message::serialize_broadcast(&agg_pubkey)?
+                    Message::serialize_broadcast(&agg_pubkey)?,
                 )
             }
             KeygenRound::Done(_, _) => return Err("protocol already finished".into()),
@@ -243,7 +242,7 @@ impl SignContext {
             let command = jc::command::noncegen();
             self.round = SignRound::R0GenerateNonce(self.initial_signer.clone());
 
-            return Ok(Message::new_card_command(command))
+            return Ok(Message::new_card_command(command));
         }
 
         self.initial_signer.first_round();
@@ -523,7 +522,6 @@ mod jc {
         const INS_GENERATE_NONCES: u8 = 0x5E;
         const INS_SIGN: u8 = 0x49;
 
-
         const INS_GET_PLAIN_PUBKEY: u8 = 0x5A;
         const INS_GET_PNONCE_SHARE: u8 = 0x35;
 
@@ -636,7 +634,7 @@ mod jc {
 
         use super::{
             command::{self},
-            response
+            response,
         };
         use ::musig2::secp256k1::PublicKey;
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
@@ -688,11 +686,7 @@ mod jc {
             let n: u8 = 3;
             let message = "Testing mssg123AD468FG8FD6849FGDFD8G84FD6G486";
 
-            let mut signers: [Signer; 3] = [
-                Signer::new(),
-                Signer::new(),
-                Signer::new(),
-            ];
+            let mut signers: [Signer; 3] = [Signer::new(), Signer::new(), Signer::new()];
 
             // keygen
             let cmd = command::keygen();
