@@ -1,23 +1,23 @@
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
-use crate::util::{deserialize_map, encode_raw_bcast, serialize_bcast, serialize_uni};
+use crate::util::{deserialize_map, Message};
 use curve25519_dalek::{
-    ristretto::{CompressedRistretto, RistrettoPoint},
+    ristretto::RistrettoPoint,
     scalar::Scalar,
 };
 use elastic_elgamal::{
     dkg::*,
-    group::{ElementOps, Ristretto},
+    group::Ristretto,
     sharing::{ActiveParticipant, Params},
-    Ciphertext, LogEqualityProof, PublicKey, VerifiableDecryption,
+    Ciphertext, LogEqualityProof, VerifiableDecryption,
 };
 use rand::rngs::OsRng;
 
 use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, Payload},
+    aead::{Aead, KeyInit, Payload},
     Aes128Gcm,
 };
-use prost::Message;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ enum KeygenRound {
 }
 
 impl KeygenContext {
-    fn init(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
         let msg = ProtocolGroupInit::decode(data)?;
 
         if msg.protocol_type != ProtocolType::Elgamal as i32 {
@@ -52,12 +52,12 @@ impl KeygenContext {
         let dkg =
             ParticipantCollectingCommitments::<Ristretto>::new(params, index.into(), &mut OsRng);
         let c = dkg.commitment();
-        let msg = serialize_bcast(&c, ProtocolType::Elgamal)?;
+        let msg = Message::serialize_reliable_broadcast(&c)?;
         self.round = KeygenRound::R1(dkg);
         Ok(msg)
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
         let msgs = ServerMessage::decode(data)?;
 
         let (c, msg) = match &self.round {
@@ -73,7 +73,7 @@ impl KeygenContext {
                 }
                 let dkg = dkg.finish_commitment_phase();
                 let public_info = dkg.public_info();
-                let msg = serialize_bcast(&public_info, ProtocolType::Elgamal)?;
+                let msg = Message::serialize_reliable_broadcast(&public_info)?;
 
                 (KeygenRound::R2(dkg), msg)
             }
@@ -93,7 +93,7 @@ impl KeygenContext {
                     .into_keys()
                     .map(|i| (i, dkg.secret_share_for_participant(i as usize)));
 
-                let msg = serialize_uni(shares, ProtocolType::Elgamal)?;
+                let msg = Message::serialize_unicast(shares)?;
 
                 (KeygenRound::R3(dkg), msg)
             }
@@ -108,9 +108,8 @@ impl KeygenContext {
                 }
                 let dkg = dkg.complete()?;
 
-                let msg = encode_raw_bcast(
+                let msg = Message::raw_reliable_broadcast(
                     dkg.key_set().shared_key().as_bytes().to_vec(),
-                    ProtocolType::Elgamal,
                 );
                 (KeygenRound::Done(dkg), msg)
             }
@@ -124,12 +123,12 @@ impl KeygenContext {
 
 #[typetag::serde(name = "elgamal_keygen")]
 impl Protocol for KeygenContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = match self.round {
             KeygenRound::R0 => self.init(data),
             _ => self.update(data),
         }?;
-        Ok((data, Recipient::Server))
+        Ok(data)
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>> {
@@ -158,7 +157,7 @@ pub(crate) struct DecryptContext {
 }
 
 impl DecryptContext {
-    fn init(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
         let msg = ProtocolInit::decode(data)?;
 
         if msg.protocol_type != ProtocolType::Elgamal as i32 {
@@ -170,9 +169,8 @@ impl DecryptContext {
 
         let (share, proof) = self.ctx.decrypt_share(self.encrypted_key, &mut OsRng);
 
-        let msg = serialize_bcast(
+        let msg = Message::serialize_broadcast(
             &serde_json::to_string(&(share, proof))?.as_bytes(),
-            ProtocolType::Elgamal,
         )?;
 
         let share = (self.ctx.index(), share);
@@ -181,7 +179,7 @@ impl DecryptContext {
         Ok(msg)
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<Vec<u8>> {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
         if self.shares.is_empty() {
             return Err("protocol not initialized".into());
         }
@@ -230,20 +228,20 @@ impl DecryptContext {
 
         self.result = Some(msg.clone());
 
-        let msg = encode_raw_bcast(msg, ProtocolType::Elgamal);
+        let msg = Message::raw_broadcast(msg);
         Ok(msg)
     }
 }
 
 #[typetag::serde(name = "elgamal_decrypt")]
 impl Protocol for DecryptContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = if self.shares.is_empty() {
             self.init(data)
         } else {
             self.update(data)
         }?;
-        Ok((data, Recipient::Server))
+        Ok(data)
     }
 
     fn finish(self: Box<Self>) -> Result<Vec<u8>> {
@@ -266,28 +264,7 @@ impl ThresholdProtocol for DecryptContext {
     }
 }
 
-fn try_encode(message: &[u8]) -> Option<RistrettoPoint> {
-    if message.len() > 30 {
-        return None;
-    }
 
-    let mut message_buffer = [0u8; 32];
-    message_buffer[0] = message.len() as u8;
-    message_buffer[1..(message.len() + 1)].copy_from_slice(message);
-    let mut scalar = Scalar::from_bytes_mod_order(message_buffer);
-
-    let offset = Scalar::from(2u32.pow(8));
-    scalar *= offset;
-    let mut d = Scalar::ZERO;
-    while d != offset {
-        if let Some(p) = CompressedRistretto((scalar + d).to_bytes()).decompress() {
-            return Some(p);
-        }
-
-        d += Scalar::ONE;
-    }
-    None
-}
 
 fn decode(p: RistrettoPoint) -> Vec<u8> {
     let scalar = Scalar::from_bytes_mod_order(p.compress().to_bytes());
@@ -295,32 +272,10 @@ fn decode(p: RistrettoPoint) -> Vec<u8> {
     scalar_bytes[1..(scalar_bytes[0] as usize + 1)].to_vec()
 }
 
-pub fn encrypt(msg: &[u8], pk: &[u8]) -> Result<Vec<u8>> {
-    let pk: PublicKey<Ristretto> = PublicKey::from_bytes(pk).unwrap();
-    let key = Aes128Gcm::generate_key(&mut OsRng);
-
-    let encoded_key: <Ristretto as ElementOps>::Element =
-        try_encode(&key).ok_or("encoding failed")?;
-    let encrypted_key = serde_json::to_vec(&pk.encrypt_element(encoded_key, &mut OsRng))?;
-
-    let cipher = Aes128Gcm::new(&key);
-    let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
-    let ct = cipher
-        .encrypt(
-            &nonce,
-            Payload {
-                msg,
-                aad: &encrypted_key,
-            },
-        )
-        .unwrap();
-
-    Ok(serde_json::to_vec(&(&encrypted_key, &nonce.to_vec(), &ct))?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::elgamal::encrypt::{encrypt, try_encode};
     use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
     use rand::seq::IteratorRandom;
 

@@ -3,6 +3,7 @@ use crate::proto::{
     self, ClientMessage, ProtocolGroupInit, ProtocolInit, ServerMessage, SignedMessage,
 };
 use crate::protocol::{Protocol, Recipient, Result};
+use crate::util::Message;
 use der::{self, Decode as _};
 use p256::ecdsa;
 use p256::ecdsa::signature::{Signer as _, Verifier as _};
@@ -44,57 +45,67 @@ fn verify_message(signed_message: &[u8], key: &ecdsa::VerifyingKey) -> Result<Ve
 }
 
 fn secure_message(
-    mut message: ClientMessage,
+    msg: Message,
     private_bundle: &MeeSignPrivateBundle,
     public_bundles: &HashMap<u32, MeeSignPublicBundle>,
-) -> Result<ClientMessage> {
-    if let Some(msg) = &mut message.broadcast {
+) -> Result<Message> {
+    let sign_bcast = |data: Vec<u8>| -> Result<Vec<u8>> {
         let pkey = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
-        let signature: ecdsa::Signature = pkey.sign(msg);
-        *msg = SignedMessage {
-            message: msg.to_vec(),
+        let signature: ecdsa::Signature = pkey.sign(&data);
+        let msg = SignedMessage {
+            message: data,
             signature: signature.to_vec(),
-        }
-        .encode_to_vec();
-    }
-    if message.unicasts.len() > 0 {
-        let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
-        for (recipient, unicast) in &mut message.unicasts {
-            let enc_key = &public_bundles[recipient].unicast_encrypt;
-            let encrypted =
-                ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
-            let signature: ecdsa::Signature = sign_key.sign(&encrypted);
-            *unicast = SignedMessage {
-                message: encrypted,
-                signature: signature.to_vec(),
+        };
+        Ok(msg.encode_to_vec())
+    };
+
+    let msg = match msg {
+        Message::Unicast(mut data) => {
+            let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
+            for (recipient, unicast) in &mut data {
+                let enc_key = &public_bundles[recipient].unicast_encrypt;
+                let encrypted =
+                    ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
+                let signature: ecdsa::Signature = sign_key.sign(&encrypted);
+                *unicast = SignedMessage {
+                    message: encrypted,
+                    signature: signature.to_vec(),
+                }
+                .encode_to_vec();
             }
-            .encode_to_vec();
+            Message::Unicast(data)
         }
-    }
-    Ok(message)
+        Message::Broadcast(data) => Message::Broadcast(sign_bcast(data)?),
+        Message::ReliableBroadcast(data) => Message::ReliableBroadcast(sign_bcast(data)?),
+        Message::CardCommand(_) => unreachable!(),
+    };
+    Ok(msg)
 }
 
 fn finalize_round(
-    data: Vec<u8>,
-    recipient: Recipient,
+    msg: Message,
     private_bundle: &MeeSignPrivateBundle,
     public_bundles: &HashMap<u32, MeeSignPublicBundle>,
+    protocol_type: ProtocolType,
 ) -> Result<(State, Vec<u8>, Recipient)> {
-    if let Recipient::Card = recipient {
-        return Ok((State::CardResponse, data, recipient));
-    }
-
-    let data = ClientMessage::decode(data.as_ref()).unwrap();
-    let state = if let Some(msg) = &data.broadcast {
-        assert_eq!(data.unicasts.len(), 0);
-        State::BroadcastExchange(msg.clone())
-    } else {
-        State::Running
+    let (state, msg, recipient) = match msg {
+        Message::CardCommand(data) => {
+            // NOTE: We just pass card commands through
+            return Ok((State::CardResponse, data, Recipient::Card))
+        },
+        msg @ Message::Unicast(_) => (State::Running, msg, Recipient::Server),
+        msg @ Message::Broadcast(_) => (State::Running, msg, Recipient::Server),
+        Message::ReliableBroadcast(data) => (
+            State::BroadcastExchange(data.clone()),
+            Message::ReliableBroadcast(data),
+            Recipient::Server,
+        ),
     };
-    let data = secure_message(data, private_bundle, public_bundles)?;
-    let data = data.encode_to_vec();
 
-    Ok((state, data, recipient))
+    let msg = secure_message(msg, private_bundle, public_bundles)?;
+    let msg = msg.encode_to_vec(protocol_type.into());
+
+    Ok((state, msg, recipient))
 }
 
 /// The `SecureLayer` wraps each `Protocol` in a state machine
@@ -117,7 +128,7 @@ pub enum State {
 /// A wrapper around the raw threshold protocols providing necessary security guarantees,
 /// namely reliable, authenticated broadcasts
 #[derive(Deserialize, Serialize)]
-pub struct SecureLayer {
+pub(crate) struct SecureLayer {
     /// Share indices of all participants
     participant_indices: Vec<u32>,
     /// Share indices corresponding to the `shares` field
@@ -222,9 +233,9 @@ impl SecureLayer {
                     return Err("invalid data in round 0".into());
                 }
 
-                let (data, recipient) = protocol.advance(&data)?;
+                let msg = protocol.advance(&data)?;
 
-                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+                finalize_round(msg, &private_bundle, &public_bundles, self.protocol_type)?
             }
             State::BroadcastExchange(our_original_msg) => {
                 let data_dec = ServerMessage::decode(data)?;
@@ -309,14 +320,14 @@ impl SecureLayer {
                 }
                 .encode_to_vec();
 
-                let (data, recipient) = protocol.advance(&data)?;
+                let msg = protocol.advance(&data)?;
 
-                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+                finalize_round(msg, &private_bundle, &public_bundles, self.protocol_type)?
             }
             State::CardResponse => {
-                let (data, recipient) = protocol.advance(&data)?;
+                let msg = protocol.advance(&data)?;
 
-                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+                finalize_round(msg, &private_bundle, &public_bundles, self.protocol_type)?
             }
             State::Running => {
                 let mut data = ServerMessage::decode(data)?;
@@ -335,9 +346,9 @@ impl SecureLayer {
                 }
                 let data = data.encode_to_vec();
 
-                let (data, recipient) = protocol.advance(&data)?;
+                let msg = protocol.advance(&data)?;
 
-                finalize_round(data, recipient, &private_bundle, &public_bundles)?
+                finalize_round(msg, &private_bundle, &public_bundles, self.protocol_type)?
             }
         };
         Ok((msg, recipient))

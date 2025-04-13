@@ -1,15 +1,14 @@
-pub mod signer;
-
 use std::convert::TryInto;
+use std::collections::HashMap;
 
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
-use crate::util::{deserialize_map, serialize_bcast};
+use crate::util::{deserialize_map, Message};
 use ::musig2::secp256k1::PublicKey;
 use ::musig2::{CompactSignature, PartialSignature, PubNonce};
-use prost::Message;
 use serde::{Deserialize, Serialize};
-use signer::Signer;
+use super::signer::Signer;
+use prost::Message as _;
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 struct Setup {
@@ -43,8 +42,10 @@ impl KeygenContext {
         }
     }
 
-    fn init(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
+        
         let msg = ProtocolGroupInit::decode(data)?;
+
         if msg.protocol_type != ProtocolType::Musig2 as i32 {
             return Err("wrong protocol type".into());
         }
@@ -65,28 +66,27 @@ impl KeygenContext {
         if self.with_card {
             let command = jc::command::keygen();
             self.round = KeygenRound::R0GetPubkey(setup);
-            Ok((command, Recipient::Card))
+            Ok(Message::new_card_command(command))
         } else {
             let signer: Signer = Signer::new();
 
             let public_key_share = signer.pubkey().serialize().to_vec();
 
-            let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
+            let msg = Message::serialize_broadcast(&public_key_share)?;
             self.round = KeygenRound::R1(setup, signer);
-            Ok((msg, Recipient::Server))
+            Ok(msg)
         }
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
-        let (c, data, rec) = match &mut self.round {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
+        let (c, data) = match &mut self.round {
             KeygenRound::R0 => return Err("protocol not initialized".into()),
             KeygenRound::R0GetPubkey(setup) => {
                 jc::response::keygen(data)?;
                 let command = jc::command::get_plain_pubkey();
                 (
                     KeygenRound::R0AwaitGetPubkey(*setup),
-                    command,
-                    Recipient::Card,
+                    Message::new_card_command(command)
                 )
             }
             KeygenRound::R0AwaitGetPubkey(setup) => {
@@ -95,8 +95,8 @@ impl KeygenContext {
 
                 let public_key_share = pubkey.serialize().to_vec();
 
-                let msg = serialize_bcast(&public_key_share, ProtocolType::Musig2)?;
-                (KeygenRound::R1(*setup, signer), msg, Recipient::Server)
+                let msg = Message::serialize_broadcast(&public_key_share)?;
+                (KeygenRound::R1(*setup, signer), msg)
             }
             KeygenRound::R1(setup, signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
@@ -123,14 +123,12 @@ impl KeygenContext {
 
                     (
                         KeygenRound::R1AwaitAggkeyLoad(*setup, signer.clone()),
-                        command,
-                        Recipient::Card,
+                        Message::new_card_command(command)
                     )
                 } else {
                     (
                         KeygenRound::Done(*setup, signer.clone()),
-                        serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?,
-                        Recipient::Server,
+                        Message::serialize_broadcast(&agg_pubkey)?
                     )
                 }
             }
@@ -140,21 +138,20 @@ impl KeygenContext {
 
                 (
                     KeygenRound::Done(*setup, signer.clone()),
-                    serialize_bcast(&agg_pubkey, ProtocolType::Musig2)?,
-                    Recipient::Server,
+                    Message::serialize_broadcast(&agg_pubkey)?
                 )
             }
             KeygenRound::Done(_, _) => return Err("protocol already finished".into()),
         };
         self.round = c;
 
-        Ok((data, rec))
+        Ok(data)
     }
 }
 
 #[typetag::serde(name = "musig2_keygen")]
 impl Protocol for KeygenContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         match self.round {
             KeygenRound::R0 => self.init(data),
             _ => self.update(data),
@@ -228,7 +225,7 @@ enum SignRound {
 
 impl SignContext {
     // Format sent is &[u8] + u8 (pubnonce and index of the signer)
-    fn init(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn init(&mut self, data: &[u8]) -> Result<Message> {
         let msg = ProtocolInit::decode(data)?;
         if msg.protocol_type != ProtocolType::Musig2 as i32 {
             return Err("wrong protocol type".into());
@@ -246,7 +243,7 @@ impl SignContext {
             let command = jc::command::noncegen();
             self.round = SignRound::R0GenerateNonce(self.initial_signer.clone());
 
-            return Ok((command, Recipient::Card));
+            return Ok(Message::new_card_command(command))
         }
 
         self.initial_signer.first_round();
@@ -257,21 +254,21 @@ impl SignContext {
         out_buffer.push(internal_index);
 
         // Serialize the public nonce and the internal index of the signer. Format: &[u8] + u8
-        let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+        let msg = Message::serialize_broadcast(&out_buffer)?;
 
         self.round = SignRound::R1(self.initial_signer.clone());
 
-        Ok((msg, Recipient::Server))
+        Ok(msg)
     }
 
-    fn update(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn update(&mut self, data: &[u8]) -> Result<Message> {
         match &self.round {
             SignRound::R0 => Err("protocol not initialized".into()),
             SignRound::R0GenerateNonce(signer) => {
                 jc::response::noncegen(data)?;
                 let command: Vec<u8> = jc::command::get_pubnonce();
                 self.round = SignRound::R0AwaitNonce(signer.clone());
-                Ok((command, Recipient::Card))
+                Ok(Message::new_card_command(command))
             }
             SignRound::R0AwaitNonce(signer) => {
                 let pubnonce = jc::response::get_pubnonce(data)?;
@@ -284,10 +281,10 @@ impl SignContext {
                 let internal_index: u8 = signer.get_index() as u8;
 
                 out_buffer.push(internal_index);
-                let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+                let msg = Message::serialize_broadcast(&out_buffer)?;
 
                 self.round = SignRound::R1(signer);
-                Ok((msg, Recipient::Server))
+                Ok(msg)
             }
             SignRound::R1(signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
@@ -320,7 +317,7 @@ impl SignContext {
                         let command = jc::command::set_agg_nonces(&aggnonce);
                         self.round = SignRound::R1PartiallySign(signer);
 
-                        return Ok((command, Recipient::Card));
+                        return Ok(Message::new_card_command(command));
                     }
 
                     let mut out_buffer = signer.get_partial_signature().serialize().to_vec();
@@ -330,11 +327,11 @@ impl SignContext {
                     out_buffer.push(internal_index);
 
                     // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
-                    let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+                    let msg = Message::serialize_broadcast(&out_buffer)?;
 
                     self.round = SignRound::R2(signer);
 
-                    Ok((msg, Recipient::Server))
+                    Ok(msg)
                 } else {
                     Err("message to sign not initialized".into())
                 }
@@ -343,7 +340,7 @@ impl SignContext {
                 jc::response::set_agg_nonces(data)?;
                 let command: Vec<u8> = jc::command::sign(self.message.as_ref().unwrap().as_slice());
                 self.round = SignRound::R1AwaitPartialSignature(signer.clone());
-                Ok((command, Recipient::Card))
+                Ok(Message::new_card_command(command))
             }
             SignRound::R1AwaitPartialSignature(signer) => {
                 let partial_signature = jc::response::sign(data)?;
@@ -357,11 +354,11 @@ impl SignContext {
                 out_buffer.push(internal_index);
 
                 // Serialize the partial signature and the internal index of the signer. Format: &[u8] + u8
-                let msg = serialize_bcast(&out_buffer, ProtocolType::Musig2)?;
+                let msg = Message::serialize_broadcast(&out_buffer)?;
 
                 self.round = SignRound::R2(signer.clone());
 
-                Ok((msg, Recipient::Server))
+                Ok(msg)
             }
             SignRound::R2(signer) => {
                 let data = ServerMessage::decode(data)?.broadcasts;
@@ -388,9 +385,9 @@ impl SignContext {
                 // Get aggregated signature and if successful, return it to the server
                 match signer.get_agg_signature() {
                     Ok(signature) => {
-                        let msg = serialize_bcast(&signature, ProtocolType::Musig2)?;
+                        let msg = Message::serialize_broadcast(&signature)?;
                         self.round = SignRound::Done(signature);
-                        Ok((msg, Recipient::Server))
+                        Ok(msg)
                     }
                     Err(e) => Err(e.into()),
                 }
@@ -402,7 +399,7 @@ impl SignContext {
 
 #[typetag::serde(name = "musig2_sign")]
 impl Protocol for SignContext {
-    fn advance(&mut self, data: &[u8]) -> Result<(Vec<u8>, Recipient)> {
+    fn advance(&mut self, data: &[u8]) -> Result<Message> {
         match self.round {
             SignRound::R0 => self.init(data),
             _ => self.update(data),
@@ -635,11 +632,11 @@ mod jc {
         use std::error::Error;
 
         use crate::protocol::apdu::{parse_response, CommandBuilder};
+        use crate::protocol::musig2::signer::Signer;
 
         use super::{
-            super::musig2,
             command::{self},
-            response,
+            response
         };
         use ::musig2::secp256k1::PublicKey;
         use ::musig2::{AggNonce, PartialSignature, PubNonce};
@@ -691,10 +688,10 @@ mod jc {
             let n: u8 = 3;
             let message = "Testing mssg123AD468FG8FD6849FGDFD8G84FD6G486";
 
-            let mut signers: [musig2::Signer; 3] = [
-                musig2::Signer::new(),
-                musig2::Signer::new(),
-                musig2::Signer::new(),
+            let mut signers: [Signer; 3] = [
+                Signer::new(),
+                Signer::new(),
+                Signer::new(),
             ];
 
             // keygen
@@ -708,10 +705,10 @@ mod jc {
             let card_pubkey = response::get_plain_pubkey(resp)?;
 
             // Initialize signers
-            signers[0] = musig2::Signer::new_from_card(card_pubkey);
+            signers[0] = Signer::new_from_card(card_pubkey);
 
             for i in 1..(n) {
-                signers[i as usize] = musig2::Signer::new();
+                signers[i as usize] = Signer::new();
             }
 
             // Get pubkeys
