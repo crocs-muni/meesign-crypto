@@ -17,6 +17,7 @@ pub enum ProtocolType {
     Gg18,
     Elgamal,
     Frost,
+    Musig2,
 }
 
 impl From<ProtocolType> for proto::ProtocolType {
@@ -25,6 +26,7 @@ impl From<ProtocolType> for proto::ProtocolType {
             ProtocolType::Gg18 => proto::ProtocolType::Gg18,
             ProtocolType::Elgamal => proto::ProtocolType::Elgamal,
             ProtocolType::Frost => proto::ProtocolType::Frost,
+            ProtocolType::Musig2 => proto::ProtocolType::Musig2,
         }
     }
 }
@@ -89,8 +91,8 @@ fn finalize_round(
     let (state, msg, recipient) = match msg {
         Message::CardCommand(data) => {
             // NOTE: We just pass card commands through
-            return Ok((State::CardResponse, data, Recipient::Card))
-        },
+            return Ok((State::CardResponse, data, Recipient::Card));
+        }
         msg @ Message::Unicast(_) => (State::Running, msg, Recipient::Server),
         msg @ Message::Broadcast(_) => (State::Running, msg, Recipient::Server),
         Message::ReliableBroadcast(data) => (

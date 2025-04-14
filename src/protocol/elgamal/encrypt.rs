@@ -1,10 +1,16 @@
 use crate::protocol::*;
+use aes_gcm::{
+    aead::{Aead, AeadCore, KeyInit, Payload},
+    Aes128Gcm,
+};
 use curve25519_dalek::{
     ristretto::{CompressedRistretto, RistrettoPoint},
     scalar::Scalar,
 };
-use elastic_elgamal::{group::{ElementOps, Ristretto}, PublicKey};
-use aes_gcm::{aead::{Aead, AeadCore, KeyInit, Payload}, Aes128Gcm};
+use elastic_elgamal::{
+    group::{ElementOps, Ristretto},
+    PublicKey,
+};
 use rand::rngs::OsRng;
 
 pub(crate) fn try_encode(message: &[u8]) -> Option<RistrettoPoint> {

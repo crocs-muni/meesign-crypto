@@ -1,10 +1,7 @@
 use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 use crate::protocol::*;
 use crate::util::{deserialize_map, Message};
-use curve25519_dalek::{
-    ristretto::RistrettoPoint,
-    scalar::Scalar,
-};
+use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use elastic_elgamal::{
     dkg::*,
     group::Ristretto,
@@ -108,9 +105,8 @@ impl KeygenContext {
                 }
                 let dkg = dkg.complete()?;
 
-                let msg = Message::raw_reliable_broadcast(
-                    dkg.key_set().shared_key().as_bytes().to_vec(),
-                );
+                let msg =
+                    Message::raw_reliable_broadcast(dkg.key_set().shared_key().as_bytes().to_vec());
                 (KeygenRound::Done(dkg), msg)
             }
             KeygenRound::Done(_) => return Err("protocol already finished".into()),
@@ -169,9 +165,8 @@ impl DecryptContext {
 
         let (share, proof) = self.ctx.decrypt_share(self.encrypted_key, &mut OsRng);
 
-        let msg = Message::serialize_broadcast(
-            &serde_json::to_string(&(share, proof))?.as_bytes(),
-        )?;
+        let msg =
+            Message::serialize_broadcast(&serde_json::to_string(&(share, proof))?.as_bytes())?;
 
         let share = (self.ctx.index(), share);
         self.shares.push(share);
@@ -263,8 +258,6 @@ impl ThresholdProtocol for DecryptContext {
         }
     }
 }
-
-
 
 fn decode(p: RistrettoPoint) -> Vec<u8> {
     let scalar = Scalar::from_bytes_mod_order(p.compress().to_bytes());

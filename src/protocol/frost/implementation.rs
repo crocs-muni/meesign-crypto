@@ -95,7 +95,10 @@ impl KeygenContext {
                     (i, round2.get(&id))
                 });
 
-                (KeygenRound::R2(*setup, secret, round1), Message::serialize_unicast(round2)?)
+                (
+                    KeygenRound::R2(*setup, secret, round1),
+                    Message::serialize_unicast(round2)?,
+                )
             }
             KeygenRound::R2(setup, secret, round1) => {
                 let data = ServerMessage::decode(data)?.unicasts;
@@ -114,12 +117,15 @@ impl KeygenContext {
                         key.signing_share(),
                         pubkey.verifying_key(),
                     );
-                    (KeygenRound::R21AwaitSetupResp(*setup, pubkey), Message::new_card_command(command))
+                    (
+                        KeygenRound::R21AwaitSetupResp(*setup, pubkey),
+                        Message::new_card_command(command),
+                    )
                 }
             }
             KeygenRound::R21AwaitSetupResp(setup, pubkey) => {
                 jc::response::setup(data)?;
-                let msg =                     Message::serialize_broadcast(&pubkey.verifying_key())?;
+                let msg = Message::serialize_broadcast(&pubkey.verifying_key())?;
                 (KeygenRound::Done(*setup, None, pubkey.clone()), msg)
             }
             KeygenRound::Done(_, _, _) => return Err("protocol already finished".into()),
