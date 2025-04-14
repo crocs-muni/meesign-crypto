@@ -3,7 +3,7 @@ pub mod frost;
 pub mod gg18;
 pub mod musig2;
 
-#[cfg(feature = "frost")]
+#[cfg(any(feature = "frost", feature = "musig2"))]
 mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
