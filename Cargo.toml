@@ -1,6 +1,6 @@
 [package]
 name = "meesign-crypto"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -48,5 +48,4 @@ gg18 = ["protocol", "dep:mpecdsa"]
 frost = ["protocol", "dep:frost-secp256k1"]
 elgamal = ["protocol", "elgamal-encrypt", "dep:elastic-elgamal"]
 elgamal-encrypt = ["dep:elastic-elgamal"]
-
 musig2 = ["protocol", "dep:musig2"]
