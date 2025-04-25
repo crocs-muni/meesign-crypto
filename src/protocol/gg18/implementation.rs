@@ -267,13 +267,13 @@ impl ThresholdProtocol for SignContext {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
     use rand::{rngs::OsRng, seq::IteratorRandom};
     use sha2::Digest;
 
-    use super::*;
     use crate::proto::ProtocolType;
-    use crate::protocol::tests::{KeygenProtocolTest, ThresholdProtocolTest};
 
     impl KeygenProtocolTest for KeygenContext {
         const PROTOCOL_TYPE: ProtocolType = ProtocolType::Gg18;
@@ -319,7 +319,6 @@ mod tests {
                     .into_iter()
                     .collect();
                 let results = <SignContext as ThresholdProtocolTest>::run(ctxs, dgst.to_vec());
-
                 let signature = results[0].clone();
 
                 for result in results {

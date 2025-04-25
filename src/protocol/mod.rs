@@ -1,8 +1,9 @@
 pub mod elgamal;
 pub mod frost;
 pub mod gg18;
+pub mod musig2;
 
-#[cfg(feature = "frost")]
+#[cfg(any(feature = "frost", feature = "musig2"))]
 mod apdu;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -44,9 +45,7 @@ mod tests {
     use prost::Message as _;
     use std::collections::HashMap;
 
-    use crate::proto::{
-        ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage,
-    };
+    use crate::proto::{ProtocolGroupInit, ProtocolInit, ProtocolType, ServerMessage};
 
     pub(super) trait KeygenProtocolTest: KeygenProtocol + Sized {
         // Cannot be added in Protocol (yet) due to typetag Trait limitations
