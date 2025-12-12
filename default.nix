@@ -26,10 +26,8 @@ rustPlatform.buildRustPackage rec {
   };
 
   checkFlags = [
-    # Skip tests that do involve a physical card
-    # TODO add a virtual card?
-    "--skip=protocol::musig2::implementation::jc::tests::sign_card"
-    "--skip=protocol::frost::implementation::jc::tests::sign_card"
+    # Skip tests that do involve a (physical) card
+    "--skip=card"
   ];
 
   nativeBuildInputs = [
