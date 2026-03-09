@@ -13,7 +13,7 @@ mpecdsa = { git = "https://github.com/jirigav/mpecdsa.git", optional = true }
 prost = "0.11"
 serde = "1.0"
 serde_json = "1.0"
-typetag = "0.2.1"
+typetag = { version = "0.2.1", optional = true }
 elastic-elgamal = { version = "0.3.0", features = ["serde"], optional = true }
 rand = "0.8.5"
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
@@ -30,6 +30,11 @@ ecies = { version = "0.2.9", default-features = false, features = ["aes-rust"] }
 musig2 = { version = "0.2.0" , optional = true, features = ["serde", "secp256k1"] }
 const-oid = "0.9.6"
 der = { version = "0.7.9", features = ["derive"] }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom_01 = { package = "getrandom", version = "0.1", features = ["wasm-bindgen"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 [build-dependencies]
 cbindgen = "0.20.0"
@@ -41,7 +46,9 @@ pcsc = "2.8.0"
 sha2 = "0.10.7"
 
 [features]
-default = ["gg18", "frost", "elgamal", "bindings", "musig2"]
+default = ["gg18", "frost", "elgamal", "bindings", "musig2", "typetag"]
+typetag = ["dep:typetag"]
+wasm = ["dep:wasm-bindgen"]
 protocol = []
 bindings = []
 gg18 = ["protocol", "dep:mpecdsa"]

@@ -18,7 +18,7 @@ pub enum Recipient {
 use crate::util::Message;
 
 #[cfg(feature = "protocol")]
-#[typetag::serde]
+#[cfg_attr(feature = "typetag", typetag::serde)]
 pub(crate) trait Protocol {
     fn advance(&mut self, data: &[u8]) -> Result<Message>;
     fn finish(self: Box<Self>) -> Result<Vec<u8>>;

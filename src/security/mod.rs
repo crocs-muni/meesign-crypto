@@ -2,7 +2,9 @@ use crate::auth::{extract_public_bundle_der, MeeSignPrivateBundle, MeeSignPublic
 use crate::proto::{
     self, ClientMessage, ProtocolGroupInit, ProtocolInit, ServerMessage, SignedMessage,
 };
-use crate::protocol::{Protocol, Recipient, Result};
+#[cfg(feature = "typetag")]
+use crate::protocol::Protocol;
+use crate::protocol::{Recipient, Result};
 use crate::util::Message;
 use der::{self, Decode as _};
 use p256::ecdsa;
@@ -11,6 +13,14 @@ use p256::pkcs8::{DecodePrivateKey as _, DecodePublicKey as _};
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// On WASM builds (without typetag), we use an enum-based approach for protocol
+/// serialization instead of trait object serialization via typetag/inventory.
+#[cfg(not(feature = "typetag"))]
+mod protocol_box;
+
+#[cfg(not(feature = "typetag"))]
+pub(crate) use protocol_box::ProtocolBox;
 
 #[derive(Copy, Clone, Deserialize, Serialize)]
 pub enum ProtocolType {
@@ -134,7 +144,10 @@ pub(crate) struct SecureLayer {
     /// Share indices corresponding to the `shares` field
     share_indices: Vec<u32>,
     /// The respective computation states for each share of this participant
+    #[cfg(feature = "typetag")]
     shares: Vec<(State, Box<dyn Protocol>)>,
+    #[cfg(not(feature = "typetag"))]
+    shares: Vec<(State, ProtocolBox)>,
     /// MeeSignPublicBundles in DER format for each share index
     public_bundles: HashMap<u32, Vec<u8>>,
     /// MeeSignPrivateBundle in DER format
@@ -145,6 +158,7 @@ pub(crate) struct SecureLayer {
 
 impl SecureLayer {
     /// Secures the communication of protocols in `shares`
+    #[cfg(feature = "typetag")]
     pub fn new(
         initial_state: State,
         shares: Vec<Box<dyn Protocol>>,
@@ -182,6 +196,55 @@ impl SecureLayer {
         Self {
             participant_indices: Vec::new(),      // NOTE: initialized in round 0
             share_indices: vec![0; shares.len()], // NOTE: initialized in round 0
+            shares: shares
+                .into_iter()
+                .map(|share| (initial_state.clone(), share))
+                .collect(),
+            public_bundles,
+            private_bundle,
+            protocol_type,
+        }
+    }
+
+    /// Secures the communication of protocols in `shares` (WASM variant without typetag)
+    #[cfg(not(feature = "typetag"))]
+    pub fn new(
+        initial_state: State,
+        shares: Vec<ProtocolBox>,
+        certs: &[u8],
+        pfx_der: &[u8],
+        protocol_type: ProtocolType,
+    ) -> Self {
+        let public_bundles = ServerMessage::decode(certs)
+            .unwrap()
+            .broadcasts
+            .into_iter()
+            .map(|(party, cert)| {
+                let bundle = extract_public_bundle_der(&cert)?;
+                Ok((party, bundle))
+            })
+            .collect::<Result<HashMap<_, _>>>()
+            .unwrap();
+
+        let private_bundle = p12::PFX::parse(pfx_der)
+            .unwrap()
+            .bags("")
+            .unwrap()
+            .into_iter()
+            .find(|bag| bag.friendly_name().unwrap() == MeeSignPrivateBundle::FRIENDLY_NAME)
+            .unwrap();
+
+        let p12::SafeBagKind::OtherBagKind(p12::OtherBag {
+            bag_value: private_bundle,
+            ..
+        }) = private_bundle.bag
+        else {
+            panic!("unexpected PKCS#12 SafeBag");
+        };
+
+        Self {
+            participant_indices: Vec::new(),
+            share_indices: vec![0; shares.len()],
             shares: shares
                 .into_iter()
                 .map(|share| (initial_state.clone(), share))

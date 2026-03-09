@@ -117,7 +117,7 @@ impl KeygenContext {
     }
 }
 
-#[typetag::serde(name = "elgamal_keygen")]
+#[cfg_attr(feature = "typetag", typetag::serde(name = "elgamal_keygen"))]
 impl Protocol for KeygenContext {
     fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = match self.round {
@@ -228,7 +228,7 @@ impl DecryptContext {
     }
 }
 
-#[typetag::serde(name = "elgamal_decrypt")]
+#[cfg_attr(feature = "typetag", typetag::serde(name = "elgamal_decrypt"))]
 impl Protocol for DecryptContext {
     fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = if self.shares.is_empty() {
