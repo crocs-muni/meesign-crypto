@@ -56,6 +56,3 @@ frost = ["protocol", "dep:frost-secp256k1"]
 elgamal = ["protocol", "elgamal-encrypt", "dep:elastic-elgamal"]
 elgamal-encrypt = ["dep:elastic-elgamal"]
 musig2 = ["protocol", "dep:musig2"]
-
-[patch."https://github.com/jirigav/curv"]
-curv-kzen = { path = "vendor/curv-kzen" }
