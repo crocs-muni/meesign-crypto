@@ -95,7 +95,7 @@ impl KeygenContext {
     }
 }
 
-#[typetag::serde(name = "gg18_keygen")]
+#[cfg_attr(feature = "typetag", typetag::serde(name = "gg18_keygen"))]
 impl Protocol for KeygenContext {
     fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = match self.round {
@@ -239,7 +239,7 @@ impl SignContext {
     }
 }
 
-#[typetag::serde(name = "gg18_sign")]
+#[cfg_attr(feature = "typetag", typetag::serde(name = "gg18_sign"))]
 impl Protocol for SignContext {
     fn advance(&mut self, data: &[u8]) -> Result<Message> {
         let data = match self.round {
