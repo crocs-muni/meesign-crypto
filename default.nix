@@ -86,9 +86,19 @@ rustPlatform.buildRustPackage rec {
     pcsclite
   ];
 
-  fixupPhase = if meesign-crypto_buildWasm then ''
-    cp --recursive ${wasmModules.out}/pkg $out/pkg
-  '' else "";
+  fixupPhase =
+    (
+      if meesign-crypto_buildWasm then
+        ''
+          cp --recursive ${wasmModules.out}/pkg $out/pkg
+        ''
+      else
+        ""
+    )
+    + (''
+      cp --recursive include $out/
+      cp --recursive proto $out/
+    '');
 
   buildInputs = [
     pcsclite
