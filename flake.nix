@@ -18,23 +18,27 @@
           overlays = [fenix.overlays.default];
         };
 
+        # kudos to: https://jordankaye.dev/posts/rust-wasm-nix/
+        f = with fenix.packages.${system}; combine [
+          stable.toolchain
+          targets.wasm32-unknown-unknown.stable.rust-std
+        ];
+
         meesign-crypto = pkgs.callPackage ./default.nix { };
       in rec {
         defaultPackage = meesign-crypto;
 
         devShell = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
+            f 
             protobuf
+
             pcsclite
             pkg-config
             rust-analyzer
-            (pkgs.fenix.stable.withComponents [
-              "cargo"
-              "clippy"
-              "rust-src"
-              "rustc"
-              "rustfmt"
-            ])
+
+            wasm-pack
+            wasm-bindgen-cli_0_2_106
           ];
         };
       }
