@@ -31,7 +31,12 @@ let
   };
 
   wasmModules = rustPlatform.buildRustPackage {
-    inherit pname version src cargoLock;
+    inherit
+      pname
+      version
+      src
+      cargoLock
+      ;
 
     name = "${pname}-wasm-modules-${version}";
 
@@ -61,7 +66,12 @@ let
 in
 # rustPlatform.buildRustPackage (finalAttrs: rec {
 rustPlatform.buildRustPackage rec {
-  inherit pname version src cargoLock;
+  inherit
+    pname
+    version
+    src
+    cargoLock
+    ;
 
   name = "${pname}-${version}";
 
