@@ -9,7 +9,8 @@
   wasm-bindgen-cli_0_2_108,
   writableTmpDirAsHomeHook,
   lld,
-  wasm ? false,
+
+  meesign-crypto_buildWasm ? false,
 }:
 let
   pname = "meesign-crypto";
@@ -75,7 +76,7 @@ rustPlatform.buildRustPackage rec {
     pcsclite
   ];
 
-  fixupPhase = if wasm then ''
+  fixupPhase = if meesign-crypto_buildWasm then ''
     cp --recursive ${wasmModules.out}/pkg $out/pkg
   '' else "";
 
