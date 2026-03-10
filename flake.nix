@@ -24,7 +24,7 @@
           targets.wasm32-unknown-unknown.stable.rust-std
         ];
 
-        meesign-crypto = pkgs.callPackage ./default.nix { };
+        meesign-crypto = pkgs.callPackage ./default.nix { wasm = true; };
       in rec {
         defaultPackage = meesign-crypto;
 
