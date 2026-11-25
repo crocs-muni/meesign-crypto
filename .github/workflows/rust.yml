@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: ["gg18", "frost", "elgamal", "musig2", "default"]
+        feature: ["gg18", "frost", "elgamal", "musig2", "dkls23", "default"]
 
     steps:
     - uses: actions/checkout@v3

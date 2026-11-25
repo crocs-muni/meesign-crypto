@@ -18,6 +18,7 @@ pub enum ProtocolType {
     Elgamal,
     Frost,
     Musig2,
+    Dkls23,
 }
 
 impl From<ProtocolType> for proto::ProtocolType {
@@ -27,6 +28,7 @@ impl From<ProtocolType> for proto::ProtocolType {
             ProtocolType::Elgamal => proto::ProtocolType::Elgamal,
             ProtocolType::Frost => proto::ProtocolType::Frost,
             ProtocolType::Musig2 => proto::ProtocolType::Musig2,
+            ProtocolType::Dkls23 => proto::ProtocolType::Dkls23,
         }
     }
 }
@@ -49,7 +51,22 @@ fn secure_message(
     private_bundle: &MeeSignPrivateBundle,
     public_bundles: &HashMap<u32, MeeSignPublicBundle>,
 ) -> Result<Message> {
-    let sign_bcast = |data: Vec<u8>| -> Result<Vec<u8>> {
+    let sign_unicasts = |mut data: HashMap<u32, Vec<u8>>| -> Result<HashMap<u32, Vec<u8>>> {
+        let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
+        for (recipient, unicast) in &mut data {
+            let enc_key = &public_bundles[recipient].unicast_encrypt;
+            let encrypted =
+                ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
+            let signature: ecdsa::Signature = sign_key.sign(&encrypted);
+            *unicast = SignedMessage {
+                message: encrypted,
+                signature: signature.to_vec(),
+            }
+            .encode_to_vec();
+        }
+        Ok(data)
+    };
+    let sign_broadcast = |data: Vec<u8>| -> Result<Vec<u8>> {
         let pkey = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.broadcast_sign)?;
         let signature: ecdsa::Signature = pkey.sign(&data);
         let msg = SignedMessage {
@@ -60,23 +77,16 @@ fn secure_message(
     };
 
     let msg = match msg {
-        Message::Unicast(mut data) => {
-            let sign_key = ecdsa::SigningKey::from_pkcs8_der(&private_bundle.unicast_sign)?;
-            for (recipient, unicast) in &mut data {
-                let enc_key = &public_bundles[recipient].unicast_encrypt;
-                let encrypted =
-                    ecies::encrypt(enc_key, unicast).map_err(|_| "failed to encrypt unicast")?;
-                let signature: ecdsa::Signature = sign_key.sign(&encrypted);
-                *unicast = SignedMessage {
-                    message: encrypted,
-                    signature: signature.to_vec(),
-                }
-                .encode_to_vec();
-            }
-            Message::Unicast(data)
-        }
-        Message::Broadcast(data) => Message::Broadcast(sign_bcast(data)?),
-        Message::ReliableBroadcast(data) => Message::ReliableBroadcast(sign_bcast(data)?),
+        Message::Unicast(data) => Message::Unicast(sign_unicasts(data)?),
+        Message::Broadcast(data) => Message::Broadcast(sign_broadcast(data)?),
+        Message::Combined {
+            unicasts,
+            broadcast,
+        } => Message::Combined {
+            unicasts: sign_unicasts(unicasts)?,
+            broadcast: sign_broadcast(broadcast)?,
+        },
+        Message::ReliableBroadcast(data) => Message::ReliableBroadcast(sign_broadcast(data)?),
         Message::CardCommand(_) => unreachable!(),
     };
     Ok(msg)
@@ -95,6 +105,7 @@ fn finalize_round(
         }
         msg @ Message::Unicast(_) => (State::Running, msg, Recipient::Server),
         msg @ Message::Broadcast(_) => (State::Running, msg, Recipient::Server),
+        msg @ Message::Combined { .. } => (State::Running, msg, Recipient::Server),
         Message::ReliableBroadcast(data) => (
             State::BroadcastExchange(data.clone()),
             Message::ReliableBroadcast(data),

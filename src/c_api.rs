@@ -5,6 +5,8 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 
 use crate::auth;
+#[cfg(feature = "dkls23")]
+use crate::protocol::dkls23;
 #[cfg(feature = "elgamal")]
 use crate::protocol::elgamal;
 #[cfg(feature = "frost")]
@@ -25,6 +27,7 @@ pub enum ProtocolId {
     Elgamal,
     Frost,
     Musig2,
+    Dkls23,
 }
 
 #[cfg(feature = "protocol")]
@@ -35,6 +38,7 @@ impl From<ProtocolId> for ProtocolType {
             ProtocolId::Elgamal => ProtocolType::Elgamal,
             ProtocolId::Frost => ProtocolType::Frost,
             ProtocolId::Musig2 => ProtocolType::Musig2,
+            ProtocolId::Dkls23 => ProtocolType::Dkls23,
         }
     }
 }
@@ -157,6 +161,8 @@ pub unsafe extern "C" fn protocol_keygen(
             (ProtocolId::Musig2, false) => Box::new(musig2::KeygenContext::new()),
             #[cfg(feature = "musig2")]
             (ProtocolId::Musig2, true) => Box::new(musig2::KeygenContext::with_card()),
+            #[cfg(feature = "dkls23")]
+            (ProtocolId::Dkls23, false) => Box::new(dkls23::KeygenContext::new()),
             _ => panic!("Protocol not supported"),
         }
     };
@@ -240,6 +246,8 @@ pub unsafe extern "C" fn protocol_init(
             ProtocolId::Frost => Box::new(frost::SignContext::new(share_ser)),
             #[cfg(feature = "musig2")]
             ProtocolId::Musig2 => Box::new(musig2::SignContext::new(share_ser)),
+            #[cfg(feature = "dkls23")]
+            ProtocolId::Dkls23 => Box::new(dkls23::SignContext::new(share_ser)),
             #[cfg(not(all(feature = "gg18", feature = "elgamal", feature = "frost")))]
             _ => panic!("Protocol not supported"),
         }

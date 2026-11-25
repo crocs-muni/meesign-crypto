@@ -30,6 +30,9 @@ ecies = { version = "0.2.9", default-features = false, features = ["aes-rust"] }
 musig2 = { version = "0.2.0" , optional = true, features = ["serde", "secp256k1"] }
 const-oid = "0.9.6"
 der = { version = "0.7.9", features = ["derive"] }
+dkls23-secp256k1 = { version = "0.5.1", optional = true }
+k256-dkls23 = { package = "k256", version = "0.14.0-rc.7", features = ["serde"], optional = true }
+hex = "0.4.3"
 
 [build-dependencies]
 cbindgen = "0.20.0"
@@ -41,7 +44,7 @@ pcsc = "2.8.0"
 sha2 = "0.10.7"
 
 [features]
-default = ["gg18", "frost", "elgamal", "bindings", "musig2"]
+default = ["gg18", "frost", "elgamal", "bindings", "musig2", "dkls23"]
 protocol = []
 bindings = []
 gg18 = ["protocol", "dep:mpecdsa"]
@@ -49,3 +52,7 @@ frost = ["protocol", "dep:frost-secp256k1"]
 elgamal = ["protocol", "elgamal-encrypt", "dep:elastic-elgamal"]
 elgamal-encrypt = ["dep:elastic-elgamal"]
 musig2 = ["protocol", "dep:musig2"]
+dkls23 = ["protocol", "dep:dkls23-secp256k1", "dep:k256-dkls23"]
+
+[profile.test]
+opt-level = 3

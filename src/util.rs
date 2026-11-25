@@ -7,6 +7,10 @@ use std::collections::HashMap;
 pub(crate) enum Message {
     Unicast(HashMap<u32, Vec<u8>>),
     Broadcast(Vec<u8>),
+    Combined {
+        unicasts: HashMap<u32, Vec<u8>>,
+        broadcast: Vec<u8>,
+    },
     ReliableBroadcast(Vec<u8>),
     CardCommand(Vec<u8>),
 }
@@ -41,6 +45,22 @@ impl Message {
     pub fn serialize_reliable_broadcast<T: Serialize>(value: &T) -> serde_json::Result<Self> {
         Ok(Self::raw_reliable_broadcast(serde_json::to_vec(value)?))
     }
+    pub fn serialize_combined<I, U, B>(kvs: I, broadcast: &B) -> serde_json::Result<Self>
+    where
+        I: IntoIterator<Item = (u32, U)>,
+        U: Serialize,
+        B: Serialize,
+    {
+        let unicasts = kvs
+            .into_iter()
+            .map(|(k, v)| Ok((k, serde_json::to_vec(&v)?)))
+            .collect::<serde_json::Result<_>>()?;
+        let broadcast = serde_json::to_vec(broadcast)?;
+        Ok(Self::Combined {
+            unicasts,
+            broadcast,
+        })
+    }
     pub fn encode(self, protocol_type: ProtocolType) -> ClientMessage {
         match self {
             Self::Unicast(data) => ClientMessage {
@@ -57,6 +77,14 @@ impl Message {
                 protocol_type: protocol_type.into(),
                 unicasts: HashMap::new(),
                 broadcast: Some(data),
+            },
+            Self::Combined {
+                unicasts,
+                broadcast,
+            } => ClientMessage {
+                protocol_type: protocol_type.into(),
+                unicasts,
+                broadcast: Some(broadcast),
             },
             Self::CardCommand(_) => unreachable!(),
         }
